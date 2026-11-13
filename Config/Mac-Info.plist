@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.music</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Musiplex adds your playlists to the Music app so they show up in Apple Music.</string>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Musiplex reads your Apple Music library and playlists.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Musiplex connects to your iPhone and iPad over Bluetooth when there is no Wi‑Fi.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_musiplex._tcp</string>
+		<string>_mplex-near._tcp</string>
+		<string>_mplex-near._udp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Musiplex shares your music library with your iPhone over your network.</string>
+</dict>
+</plist>
