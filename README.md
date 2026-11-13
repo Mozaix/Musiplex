@@ -22,7 +22,7 @@ You need Xcode (free from the Mac App Store) and a free Apple ID.
 1. Clone the repository.
 
    ```bash
-   git clone https://github.com/<you>/Musiplex.git
+   git clone https://github.com/Mozaix/Musiplex.git
    ```
 
    ```bash
