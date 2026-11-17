@@ -268,6 +268,9 @@ final class Server {
         case "revert":
             guard clients[i].authed, let n = m.text.flatMap(Int.init) else { return }
             library.revert(n, source: clients[i].name)
+        case "reorderPlaylists":
+            guard clients[i].authed, let ids = m.ids else { return }
+            library.setOrder(ids)
         case "deletePlaylist":
             guard clients[i].authed, let id = m.text else { return }
             library.deletePlaylist(id, source: m.source ?? clients[i].name)

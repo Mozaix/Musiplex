@@ -246,7 +246,8 @@ private struct QuickActions: View {
 
 @MainActor private func openMain() {
     NSApp.activate(ignoringOtherApps: true)
-    NSApp.windows.first { $0.canBecomeMain }?.makeKeyAndOrderFront(nil)
+    (NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") == true }
+        ?? NSApp.windows.first { $0.canBecomeMain })?.makeKeyAndOrderFront(nil)
 }
 
 /// The icon itself: a waveform while music plays.

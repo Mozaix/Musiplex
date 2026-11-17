@@ -124,6 +124,15 @@ struct Sidebar: View {
                             }
                             .buttonStyle(.plain)
                             .contextMenu { PlaylistMenu(list: list) }
+                            // Drag a playlist onto another to put it there.
+                            .draggable(PlaylistDrag(id: list.id)) {
+                                Text(list.name).padding(6).background(Theme.raised, in: RoundedRectangle(cornerRadius: 6))
+                            }
+                            .dropDestination(for: PlaylistDrag.self) { items, _ in
+                                guard let moved = items.first, moved.id != list.id else { return false }
+                                withAnimation(.snappy) { model.library.movePlaylist(moved.id, before: list.id) }
+                                return true
+                            }
                         }
                         Text("FOLDERS").font(.caption2.weight(.semibold)).foregroundStyle(Theme.dim)
                             .padding(.top, 12).padding(.horizontal, 10).padding(.bottom, 4)
@@ -844,5 +853,14 @@ struct PlaylistMenu: View {
                 model.library.deletePlaylist(list.id)
             }
         }
+    }
+}
+
+
+/// A playlist being dragged to a new spot in the sidebar.
+struct PlaylistDrag: Codable, Transferable {
+    var id: String
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .data)
     }
 }

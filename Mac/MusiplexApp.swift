@@ -39,6 +39,13 @@ final class AppModel {
     }
     @ObservationIgnored private var nowPlaying: NowPlayingBridge?
 
+    /// Re-send your playlists to the Music app whenever they change.
+    var autoPushToAppleMusic = UserDefaults.standard.bool(forKey: "autoPushAppleMusic") {
+        didSet { UserDefaults.standard.set(autoPushToAppleMusic, forKey: "autoPushAppleMusic") }
+    }
+    @ObservationIgnored private var pushQueue = Set<String>()
+    @ObservationIgnored private var pushTask: Task<Void, Never>?
+
     init() {
         server = Server(library: library, session: session)
         let library = library, session = session, server = server
@@ -67,6 +74,8 @@ final class AppModel {
         }
         server.start()
         remote.start()
+        library.setUpSongsFolders()
+        library.onPlaylistsEdited = { [weak self] ids in self?.queueAutoPush(ids) }
         notch = NotchController(model: self)
         if let folder = UserDefaults.standard.string(forKey: "notchSnapshot") {
             DispatchQueue.main.async { [weak self] in self?.notch.snapshot(to: folder) }
@@ -121,17 +130,54 @@ final class AppModel {
     }
 
     /// Creates (or refreshes) the playlist in the Music app, so it syncs to your iPhone.
-    func sendToAppleMusic(_ list: LibraryPlaylist) {
+    func sendToAppleMusic(_ list: LibraryPlaylist, quiet: Bool = false) {
         let songs = list.tracks.compactMap { t in
             library.url(for: t.id).map { AppleMusicExport.Song(path: $0.path, musicID: library.musicIDs[t.id]) }
         }
-        show("Adding “\(list.name)” to Apple Music…", sticky: true)
+        if !quiet { show("Adding “\(list.name)” to Apple Music…", sticky: true) }
         Task {
             switch await AppleMusicExport.send(name: list.name, songs: songs) {
-            case .done(let n): show("“\(list.name)” is in Apple Music with \(n) song\(n == 1 ? "" : "s").")
-            case .failed(let why): show("Couldn't add to Apple Music: \(why)")
+            case .done(let n):
+                if !quiet { show("“\(list.name)” is in Apple Music with \(n) song\(n == 1 ? "" : "s").") }
+            case .failed(let why): show("Couldn't update Apple Music: \(why)")
             }
         }
+    }
+
+    /// Auto-push: collects edited playlists and sends them to Apple Music a
+    /// few seconds after the edits stop (one update per burst of changes).
+    private func queueAutoPush(_ ids: [String]) {
+        guard autoPushToAppleMusic else { return }
+        pushQueue.formUnion(ids)
+        pushTask?.cancel()
+        pushTask = Task {
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled else { return }
+            let ids = pushQueue
+            pushQueue = []
+            for list in library.playlists where ids.contains(list.id) && list.editable {
+                sendToAppleMusic(list, quiet: true)
+            }
+        }
+    }
+
+    // MARK: Mini player
+
+    /// Hides the big window and shows the small floating player.
+    func showMiniPlayer(_ openWindow: OpenWindowAction) {
+        openWindow(id: "mini")
+        for window in NSApp.windows where window.identifier?.rawValue.hasPrefix("main") == true { window.orderOut(nil) }
+    }
+
+    /// Back to the full window.
+    func showFullWindow(_ openWindow: OpenWindowAction) {
+        if let main = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("main") == true }) {
+            main.makeKeyAndOrderFront(nil)
+        } else {
+            openWindow(id: "main")
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        for window in NSApp.windows where window.identifier?.rawValue.hasPrefix("mini") == true { window.close() }
     }
 
     func show(_ message: String, sticky: Bool = false) {
@@ -175,7 +221,7 @@ struct MusiplexApp: App {
     @State private var model = AppModel()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             RootView()
                 .environment(model)
                 .frame(minWidth: 980, minHeight: 640)
@@ -200,6 +246,15 @@ struct MusiplexApp: App {
                 Toggle("Show Notch", isOn: Binding(get: { model.notchEnabled }, set: { model.notchEnabled = $0 }))
             }
         }
+
+        Window("Now Playing", id: "mini") {
+            MiniPlayerView()
+                .environment(model)
+                .preferredColorScheme(.dark)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .defaultPosition(.topTrailing)
 
         MenuBarExtra {
             MenuBarPlayer().environment(model)

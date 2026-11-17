@@ -419,8 +419,20 @@ final class LibraryStore {
         // the same playlist synced in from your iPhone: show it once, as yours.
         func key(_ name: String) -> String { name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
         let mine = Set(userPlaylists.map { key($0.name) })
-        playlists = userPlaylists.compactMap { resolve($0, editable: true) }.sorted(by: byName)
+        let natural = userPlaylists.compactMap { resolve($0, editable: true) }.sorted(by: byName)
             + rawPlaylists.filter { !mine.contains(key($0.name)) }.compactMap { resolve($0, editable: false) }.sorted(by: byName)
+        if order.isEmpty {
+            // First time: your playlists newest-first (from the version history), then the rest.
+            var created: [String: Date] = [:]
+            for v in history { for c in v.changes where c.kind == .created { if let id = c.playlistID, created[id] == nil { created[id] = v.date } } }
+            let mineSorted = natural.filter(\.editable).sorted { (created[$0.id] ?? .distantPast) > (created[$1.id] ?? .distantPast) }
+            order = mineSorted.map(\.id) + natural.filter { !$0.editable }.map(\.id)
+        }
+        let rank = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        // Ones not placed yet (new) go first.
+        playlists = natural.enumerated().sorted { a, b in
+            (rank[a.element.id] ?? -1_000_000 + a.offset, a.offset) < (rank[b.element.id] ?? -1_000_000 + b.offset, b.offset)
+        }.map(\.element)
 
         if save, let data = try? JSONEncoder().encode(Index(entries: new, playlists: rawPlaylists)) {
             try? data.write(to: indexURL, options: .atomic)
@@ -443,6 +455,7 @@ final class LibraryStore {
         }
         let finalName = clean.isEmpty ? "New Playlist" : clean
         userPlaylists.append(Playlist(id: id, name: finalName, trackIDs: []))
+        putOnTop(id)
         record([PlaylistChange(playlist: finalName, kind: .created, playlistID: id)], source: source)
         if ids.isEmpty { saveUserPlaylists() } else { add(ids, toPlaylist: id, source: source) }
         return id
@@ -494,6 +507,101 @@ final class LibraryStore {
     }
 
     @ObservationIgnored private var pendingRevert: Int?
+    /// Called with the IDs of your playlists that just changed (for auto-push to Apple Music).
+    @ObservationIgnored var onPlaylistsEdited: (([String]) -> Void)?
+
+    // MARK: Playlist order
+    // Newest playlists go to the top; drag to rearrange. The order is saved
+    // and shared with your devices.
+
+    @ObservationIgnored private var order: [String] = UserDefaults.standard.stringArray(forKey: "playlistOrder") ?? []
+
+    /// Moves `id` so it sits just before `target` (or to the end when nil).
+    func movePlaylist(_ id: String, before target: String?) {
+        var ids = playlists.map(\.id)
+        guard let from = ids.firstIndex(of: id) else { return }
+        ids.remove(at: from)
+        if let target, let to = ids.firstIndex(of: target) { ids.insert(id, at: to) } else { ids.append(id) }
+        setOrder(ids)
+    }
+
+    func setOrder(_ ids: [String]) {
+        order = ids
+        UserDefaults.standard.set(order, forKey: "playlistOrder")
+        install(entries, save: false)
+    }
+
+    private func putOnTop(_ id: String) {
+        order.removeAll { $0 == id }
+        order.insert(id, at: 0)
+        UserDefaults.standard.set(order, forKey: "playlistOrder")
+    }
+
+    // MARK: Floaters
+    // ~/Documents/Songs/Floaters is watched: anything dropped in shows up in
+    // Musiplex and sits in the "Floating" playlist (shown in Settings, not the
+    // sidebar) until you move it into a playlist.
+
+    static let songsFolder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Songs", isDirectory: true)
+    static let floatersFolder = songsFolder.appendingPathComponent("Floaters", isDirectory: true)
+
+    /// Floater songs you've moved into a playlist (they leave the Floating list).
+    private(set) var settled: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "settledFloaters") ?? [])
+    @ObservationIgnored private var watcher: DispatchSourceFileSystemObject?
+    @ObservationIgnored private var watchDebounce: Task<Void, Never>?
+
+    /// Songs in the Floaters folder that haven't been moved into a playlist yet, newest first.
+    var floaters: [Track] {
+        let prefix = Self.floatersFolder.path + "/"
+        return tracks.filter { t in
+            guard !settled.contains(t.id), let path = paths[t.id] else { return false }
+            return path.hasPrefix(prefix)
+        }
+        .sorted { $0.addedAt > $1.addedAt }
+    }
+
+    /// Moves a floating song into one of your playlists (it leaves the Floating list).
+    func settle(_ ids: [String], into playlistID: String, source: String = "This Mac") {
+        add(ids, toPlaylist: playlistID, source: source)
+        settled.formUnion(ids)
+        UserDefaults.standard.set(Array(settled), forKey: "settledFloaters")
+    }
+
+    /// Takes a song off the Floating list without adding it anywhere.
+    func dismissFloater(_ id: String) {
+        settled.insert(id)
+        UserDefaults.standard.set(Array(settled), forKey: "settledFloaters")
+    }
+
+    /// Makes Documents/Songs/Floaters, adds Documents/Songs to the library and
+    /// starts watching Floaters for new files.
+    func setUpSongsFolders() {
+        let fm = FileManager.default
+        try? fm.createDirectory(at: Self.floatersFolder, withIntermediateDirectories: true)
+        if !sources.contains(Self.songsFolder.path) {
+            sources.append(Self.songsFolder.path)
+            UserDefaults.standard.set(sources, forKey: "sources")
+            rescan()
+        }
+        let fd = open(Self.floatersFolder.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                // Files arrive in pieces (downloads); wait until things settle.
+                self?.watchDebounce?.cancel()
+                self?.watchDebounce = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(3))
+                    guard !Task.isCancelled else { return }
+                    self?.rescan()
+                }
+            }
+        }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        watcher = source
+    }
 
     /// Undoes one version: songs it added are taken out, songs it removed go
     /// back in, a rename is renamed back, a created playlist is deleted and a
@@ -566,6 +674,8 @@ final class LibraryStore {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         if let data = try? encoder.encode(history) { try? data.write(to: historyURL, options: .atomic) }
+        let edited = changes.compactMap(\.playlistID)
+        if !edited.isEmpty { onPlaylistsEdited?(edited) }
     }
 
     private func saveUserPlaylists() {

@@ -729,6 +729,14 @@ final class PhoneModel {
         transmit(Message(type: "playlist", name: name, text: playlistID))
     }
 
+    /// Saves a new playlist order on the Mac (shown on every device).
+    func reorderPlaylists(_ ids: [String]) {
+        // Show it straight away; the Mac's catalog confirms it.
+        let rank = Dictionary(ids.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        playlists.sort { (rank[$0.id] ?? .max) < (rank[$1.id] ?? .max) }
+        transmit(Message(type: "reorderPlaylists", ids: ids))
+    }
+
     /// Asks the Mac to undo one version of your playlists.
     func revert(_ version: PlaylistVersion) {
         transmit(Message(type: "revert", text: String(version.number)))

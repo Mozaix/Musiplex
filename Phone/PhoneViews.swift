@@ -42,6 +42,7 @@ struct PhoneRoot: View {
     @State private var newPlaylistName = ""
     @State private var confirmDeleteAll = false
     @State private var syncResult: (removed: Int, added: Int)?
+    @State private var reordering = false
 
     private var syncTitle: String {
         guard let r = syncResult else { return "" }
@@ -120,6 +121,9 @@ struct PhoneRoot: View {
         } message: {
             Text("It's saved on your Mac and shows up on all your devices.")
         }
+        .sheet(isPresented: $reordering) {
+            ReorderPlaylistsSheet()
+        }
         .sheet(isPresented: $showLink) {
             LinkSheet().presentationDetents([.medium, .large])
         }
@@ -159,12 +163,22 @@ struct PhoneRoot: View {
             .padding(.horizontal, 16)
         case .playlists:
             if model.isLinked {
-                Button { model.newPlaylistIDs = [] } label: {
-                    Label("New Playlist", systemImage: "plus")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity).padding(.vertical, 11)
-                        .background(Theme.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .foregroundStyle(.white)
+                HStack(spacing: 10) {
+                    Button { model.newPlaylistIDs = [] } label: {
+                        Label("New Playlist", systemImage: "plus")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity).padding(.vertical, 11)
+                            .background(Theme.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .foregroundStyle(.white)
+                    }
+                    Button { reordering = true } label: {
+                        Label("Rearrange", systemImage: "arrow.up.arrow.down")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity).padding(.vertical, 11)
+                            .background(Theme.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .foregroundStyle(.white)
+                    }
+                    .disabled(model.playlists.count < 2)
                 }
                 .padding(.horizontal, 16).padding(.bottom, 10)
             }
@@ -745,9 +759,91 @@ struct MiniPlayer: View {
     }
 }
 
+/// Drag playlists into the order you want; saved on your Mac for every device.
+struct ReorderPlaylistsSheet: View {
+    @Environment(PhoneModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var lists: [Playlist] = []
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(lists) { list in
+                    HStack(spacing: 12) {
+                        ArtworkView(id: list.trackIDs.first, radius: 5).frame(width: 40, height: 40)
+                        Text(list.name).lineLimit(1)
+                    }
+                }
+                .onMove { lists.move(fromOffsets: $0, toOffset: $1) }
+            }
+            .environment(\.editMode, .constant(.active))
+            .navigationTitle("Rearrange Playlists")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        model.reorderPlaylists(lists.map(\.id))
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .onAppear { lists = model.playlists }
+    }
+}
+
+/// What's playing and what's next. Tap a song to jump to it.
+struct PhoneQueueView: View {
+    @Environment(PhoneModel.self) private var model
+
+    var body: some View {
+        let state = model.session.state
+        let upcoming = Array(state.queue.enumerated().dropFirst(state.index + 1).prefix(100))
+        NavigationStack {
+            List {
+                if let track = model.currentTrack {
+                    Section("Now Playing") {
+                        row(track, highlight: true)
+                    }
+                }
+                Section(upcoming.isEmpty ? "Nothing next" : "Next Up") {
+                    ForEach(upcoming, id: \.offset) { index, id in
+                        if let track = model.track(id) {
+                            Button { model.send(Command(action: "jump", index: index)) } label: { row(track, highlight: false) }
+                                .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(Theme.bg)
+            .navigationTitle("Queue")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private func row(_ track: Track, highlight: Bool) -> some View {
+        HStack(spacing: 12) {
+            ArtworkView(id: track.id, radius: 6).frame(width: 44, height: 44)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(track.title).lineLimit(1).foregroundStyle(highlight ? Theme.accent : .white)
+                Text(track.artist).font(.footnote).foregroundStyle(Theme.dim).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            if highlight, model.session.state.isPlaying {
+                Image(systemName: "waveform").foregroundStyle(Theme.accent)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+}
+
 struct NowPlayingView: View {
     @Environment(PhoneModel.self) private var model
     @State private var tint = Color.clear
+    @State private var showQueue = false
 
     var body: some View {
         let session = model.session
@@ -767,11 +863,20 @@ struct NowPlayingView: View {
                     .animation(.spring(duration: 0.4), value: state.isPlaying)
 
                 HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(track?.title ?? "—").font(.title2.bold()).lineLimit(1)
-                        Text(track?.artist ?? "").font(.body).foregroundStyle(Theme.dim).lineLimit(1)
+                    // Tap the song to see what's coming up.
+                    Button { showQueue = true } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(track?.title ?? "—").font(.title2.bold()).lineLimit(1)
+                            Text(track?.artist ?? "").font(.body).foregroundStyle(Theme.dim).lineLimit(1)
+                        }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                     Spacer()
+                    Button { showQueue = true } label: {
+                        Image(systemName: "list.bullet").font(.title2).foregroundStyle(.white)
+                    }
+                    .padding(.trailing, 6)
                     if let track {
                         if model.isDownloaded(track.id) {
                             Image(systemName: "checkmark.circle.fill").font(.title2).foregroundStyle(Theme.accent)
@@ -838,6 +943,9 @@ struct NowPlayingView: View {
         .task(id: state.currentID) {
             let color = await ArtCache.shared.tint(state.currentID)
             withAnimation(.easeInOut(duration: 0.8)) { tint = color }
+        }
+        .sheet(isPresented: $showQueue) {
+            PhoneQueueView().presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
         }
     }
 

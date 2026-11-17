@@ -8,6 +8,8 @@ struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             Text("Settings").font(.system(size: 26, weight: .bold))
+            FloatingCard()
+            AppleMusicCard()
             RemoteAccessCard()
             VersionHistoryCard(history: model.library.history)
         }
@@ -215,6 +217,89 @@ struct RemoteAccessCard: View {
         case .connected: .green
         case .turningOn: .yellow
         default: .orange
+        }
+    }
+}
+
+/// The Floating playlist: songs that landed in Documents/Songs/Floaters and
+/// haven't been put into a playlist yet.
+struct FloatingCard: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let floaters = model.library.floaters
+        SettingsCard(title: "Floating", symbol: "tray.and.arrow.down.fill") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Put music files in **Documents › Songs › Floaters** and they appear here. Each stays until you move it into a playlist.")
+                        .font(.callout).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Open Folder") { NSWorkspace.shared.open(LibraryStore.floatersFolder) }
+                }
+                if floaters.isEmpty {
+                    Text("Nothing floating right now.").font(.callout).foregroundStyle(Theme.dim)
+                } else {
+                    HStack {
+                        Button { model.play(floaters) } label: { Label("Play All", systemImage: "play.fill") }
+                        Menu("Move All to…") {
+                            ForEach(model.library.playlists.filter(\.editable)) { list in
+                                Button(list.name) { model.library.settle(floaters.map(\.id), into: list.id) }
+                            }
+                            Divider()
+                            Button("New Playlist…") { model.newPlaylist(with: floaters.map(\.id)); settleAfterPrompt(floaters.map(\.id)) }
+                        }
+                        .fixedSize()
+                    }
+                    ForEach(floaters) { track in
+                        HStack(spacing: 10) {
+                            ArtworkView(id: track.id, radius: 4).frame(width: 34, height: 34)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(track.title).font(.callout).lineLimit(1)
+                                Text(track.artist).font(.caption).foregroundStyle(Theme.dim).lineLimit(1)
+                            }
+                            Spacer()
+                            Button { model.play([track]) } label: { Image(systemName: "play.circle.fill").font(.title3) }
+                                .buttonStyle(.plain).foregroundStyle(Theme.accent)
+                            Menu {
+                                ForEach(model.library.playlists.filter(\.editable)) { list in
+                                    Button(list.name) { model.library.settle([track.id], into: list.id) }
+                                }
+                                Divider()
+                                Button("Remove from Floating") { model.library.dismissFloater(track.id) }
+                            } label: {
+                                Label("Move to", systemImage: "arrow.right.circle")
+                            }
+                            .fixedSize()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A song moved via "New Playlist…" leaves Floating once the playlist exists.
+    private func settleAfterPrompt(_ ids: [String]) {
+        Task {
+            while model.playlistPrompt != nil { try? await Task.sleep(for: .milliseconds(300)) }
+            for id in ids where model.library.playlists.contains(where: { $0.editable && $0.tracks.contains { $0.id == id } }) {
+                model.library.dismissFloater(id)
+            }
+        }
+    }
+}
+
+struct AppleMusicCard: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        SettingsCard(title: "Apple Music", symbol: "applelogo") {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Push playlist changes to Apple Music automatically", isOn: $model.autoPushToAppleMusic)
+                    .toggleStyle(.switch)
+                Text("When you change one of your Musiplex playlists, it's updated in the Music app a few seconds later, so it reaches your iPhone through iCloud.")
+                    .font(.caption).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }

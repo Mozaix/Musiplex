@@ -3,6 +3,7 @@ import SwiftUI
 struct PlayerBar: View {
     @Environment(AppModel.self) private var model
     @State private var showDevices = false
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let session = model.session
@@ -10,13 +11,19 @@ struct PlayerBar: View {
         let track = model.currentTrack
         HStack(spacing: 16) {
             // Now playing
-            HStack(spacing: 12) {
-                ArtworkView(id: track?.id, radius: 6).frame(width: 56, height: 56)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(track?.title ?? "Nothing playing").font(.callout.weight(.semibold)).lineLimit(1)
-                    Text(track?.artist ?? "Pick a song to start").font(.caption).foregroundStyle(Theme.dim).lineLimit(1)
+            // Click the song to see the queue.
+            Button { withAnimation(.easeOut(duration: 0.2)) { model.showQueue.toggle() } } label: {
+                HStack(spacing: 12) {
+                    ArtworkView(id: track?.id, radius: 6).frame(width: 56, height: 56)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(track?.title ?? "Nothing playing").font(.callout.weight(.semibold)).lineLimit(1)
+                        Text(track?.artist ?? "Pick a song to start").font(.caption).foregroundStyle(Theme.dim).lineLimit(1)
+                    }
                 }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .help("Show the queue")
             .frame(maxWidth: .infinity, alignment: .leading)
 
             // Transport
@@ -48,6 +55,8 @@ struct PlayerBar: View {
                 icon("list.bullet", active: model.showQueue) {
                     withAnimation(.easeOut(duration: 0.2)) { model.showQueue.toggle() }
                 }
+                icon("pip.enter") { model.showMiniPlayer(openWindow) }
+                    .help("Mini player: hide this window and show a small floating player")
                 Button { showDevices.toggle() } label: {
                     Image(systemName: state.activeDevice == "mac" ? "hifispeaker.and.homepod" : "iphone.radiowaves.left.and.right")
                         .foregroundStyle(model.server.phones.isEmpty ? Theme.dim : Theme.accent)

@@ -127,6 +127,21 @@ Follow these in order.
   - Apple doesn't let apps remove songs from Apple Music playlists. So removing a song in Apple Music removes it from Musiplex, but not the other way round.
   - Songs are matched by title and artist, so only songs that exist on both sides can be synced.
 
+## Playlists, queue, mini player and Floating
+
+- **Order:** new playlists appear at the top.
+  - On the Mac, drag a playlist in the sidebar onto another to move it there.
+  - On the iPhone or iPad, tap **Rearrange** in the Playlists tab.
+  - The order is saved on the Mac and used on every device.
+- **Auto-push to Apple Music:** Mac **Settings → Apple Music**. When on, any change to one of your playlists is sent to the Music app a few seconds later.
+- **Queue:**
+  - On the Mac, click the song in the player bar.
+  - On the phone, tap the song name (or the list button) on the Now Playing screen, then tap any song to jump to it.
+- **Mini player (Mac):** the button next to the queue button in the player bar hides the big window and opens a small floating player. Its list button slides the queue out to the side, and the expand button brings the big window back.
+- **Floating:** put music files in **Documents › Songs › Floaters**.
+  - They appear in Musiplex within a few seconds, in the Floating list under Mac **Settings**. They aren't shown in the sidebar.
+  - Use **Move to** to put a song into a playlist, and it leaves Floating.
+
 ## Connection: Bluetooth backup
 
 Turn on **Settings → Connection → Bluetooth backup link** to keep a Bluetooth link to the Mac open alongside Wi‑Fi. Play, pause and skip go over both links, and the Mac runs each command only once. If Wi‑Fi drops, control switches to Bluetooth straight away.

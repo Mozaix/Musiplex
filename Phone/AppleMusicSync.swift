@@ -152,6 +152,16 @@ final class AppleMusicSync {
             } else {
                 let ids = keysNow.compactMap { byKey[$0] }
                 guard !ids.isEmpty else { continue }   // nothing in common with your Mac
+                // Already have a Musiplex playlist with this name (e.g. one Musiplex
+                // pushed to Apple Music)? Link to it instead of making a twin.
+                let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if let same = mine.first(where: { $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == trimmed }),
+                   !next.contains(where: { $0.mp == same.id }) {
+                    let missing = ids.filter { !same.trackIDs.contains($0) }
+                    if !missing.isEmpty { send(Message(type: "playlist", ids: missing, text: same.id, source: from)) }
+                    next.append(Link(am: list.persistentID, mp: same.id, name: name, lastAM: keysNow, lastMP: same.trackIDs))
+                    continue
+                }
                 let mp = "my-am-\(list.persistentID)"
                 if mineByID[mp] == nil {
                     send(Message(type: "playlist", name: name, ids: ids, text: mp, source: from))
