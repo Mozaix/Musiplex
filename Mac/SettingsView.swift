@@ -8,6 +8,7 @@ struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             Text("Settings").font(.system(size: 26, weight: .bold))
+            TasteCard()
             FloatingCard()
             AppleMusicCard()
             RemoteAccessCard()
@@ -217,6 +218,55 @@ struct RemoteAccessCard: View {
         case .connected: .green
         case .turningOn: .yellow
         default: .orange
+        }
+    }
+}
+
+/// What Musiplex has learned: your genres, and songs you haven't played that fit them.
+struct TasteCard: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let tracks = model.library.tracks
+        let taste = Array(model.recommender.taste(tracks).prefix(6))
+        let suggestions = model.recommender.discover(tracks: tracks, count: 8).compactMap { model.library.track($0) }
+        SettingsCard(title: "Your Taste", symbol: "sparkles") {
+            VStack(alignment: .leading, spacing: 12) {
+                @Bindable var lookup = model.genreLookup
+                Toggle("Find genres online", isOn: $lookup.enabled).toggleStyle(.switch)
+                Text(lookup.running
+                     ? "Looking up \(lookup.remaining) artist\(lookup.remaining == 1 ? "" : "s")… (about 20 a minute, in the background)"
+                     : "Your songs have no genre tags, so Musiplex can look up each artist's genre once on Apple's public music search. Only artist names are sent, never what you play. Surprise and Guess work without it, and everything else stays on your devices.")
+                    .font(.caption).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+                if taste.isEmpty {
+                    Text("No genres yet.").font(.callout).foregroundStyle(Theme.dim)
+                } else {
+                    ForEach(taste, id: \.genre) { item in
+                        HStack(spacing: 10) {
+                            Text(item.genre).font(.callout).frame(width: 150, alignment: .leading)
+                            GeometryReader { geo in
+                                Capsule().fill(Theme.gradient).frame(width: max(6, geo.size.width * item.share / max(taste[0].share, 0.01)))
+                            }
+                            .frame(height: 8)
+                            Text("\(Int((item.share * 100).rounded()))%").font(.caption.monospacedDigit()).foregroundStyle(Theme.dim)
+                                .frame(width: 40, alignment: .trailing)
+                        }
+                    }
+                }
+                Text("Learned from \(model.recommender.playedCount) songs you've played. Everything stays on your devices.")
+                    .font(.caption).foregroundStyle(Theme.dim)
+                if !suggestions.isEmpty {
+                    HStack {
+                        Text("Suggested for you").font(.headline)
+                        Spacer()
+                        Button { model.play(suggestions) } label: { Label("Play All", systemImage: "play.fill") }
+                    }
+                    .padding(.top, 4)
+                    Text("Songs in your library you haven't played yet, in the genres you play most.")
+                        .font(.caption).foregroundStyle(Theme.dim)
+                    TrackList(tracks: suggestions)
+                }
+            }
         }
     }
 }

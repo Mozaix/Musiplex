@@ -82,6 +82,10 @@ struct Sidebar: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     do {
+                        Text("FOR YOU").font(.caption2.weight(.semibold)).foregroundStyle(Theme.dim)
+                            .padding(.top, 12).padding(.horizontal, 10).padding(.bottom, 4)
+                        forYouRow("Surprise", "sparkles", "Picks as it plays", id: "auto-surprise") { model.startSurprise() }
+                        forYouRow("Guess", "wand.and.stars", model.library.guessMoment.capitalizedFirst, id: "auto-guess") {}
                         HStack {
                             Text("PLAYLISTS").font(.caption2.weight(.semibold)).foregroundStyle(Theme.dim)
                             Spacer()
@@ -177,6 +181,32 @@ struct Sidebar: View {
             .padding(.horizontal, 10).padding(.vertical, 8)
             .foregroundStyle(selected ? .white : Theme.dim)
             .background(selected ? Theme.raised : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func forYouRow(_ title: String, _ icon: String, _ subtitle: String, id: String,
+                           tap: @escaping () -> Void) -> some View {
+        let selected = model.route == .playlist(id) && model.search.isEmpty
+        return Button {
+            model.search = ""
+            model.route = .playlist(id)
+            tap()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: icon).font(.system(size: 12, weight: .bold)).foregroundStyle(.black)
+                    .frame(width: 26, height: 26)
+                    .background(Theme.gradient, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title).font(.callout).lineLimit(1)
+                    Text(subtitle).font(.caption2).foregroundStyle(Theme.dim).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .foregroundStyle(selected ? .white : Theme.dim)
+            .background(selected ? Theme.raised : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -380,6 +410,14 @@ struct MainView: View {
                 }
             case .settings:
                 SettingsView()
+            case .playlist("auto-surprise"):
+                SurpriseView()
+            case .playlist("auto-guess"):
+                if let guess = library.forYou.first(where: { $0.id == "auto-guess" }) {
+                    CollectionView(kind: "Guess · made for this moment", title: "Guess",
+                                   subtitle: library.guessMoment.capitalizedFirst,
+                                   artID: guess.artID, tracks: guess.tracks, round: false)
+                }
             case .playlist(let id):
                 if let list = library.playlists.first(where: { $0.id == id }) {
                     CollectionView(playlist: list, kind: "Playlist", title: list.name, subtitle: nil,
@@ -862,5 +900,51 @@ struct PlaylistDrag: Codable, Transferable {
     var id: String
     static var transferRepresentation: some TransferRepresentation {
         CodableRepresentation(contentType: .data)
+    }
+}
+
+
+extension String {
+    var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
+}
+
+/// Surprise: a playlist with no songs. It picks the next one as it plays,
+/// from what you listen to, the genre, and the time of day.
+struct SurpriseView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let state = model.session.state
+        let on = state.radio == "surprise"
+        let upcoming = on ? Array(state.queue.dropFirst(state.index + 1)).compactMap { model.library.track($0) } : []
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .bottom, spacing: 22) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 64, weight: .bold)).foregroundStyle(.black)
+                    .frame(width: 180, height: 180)
+                    .background(Theme.gradient, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .shadow(color: .black.opacity(0.4), radius: 20, y: 10)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("PLAYLIST · PICKS AS IT PLAYS").font(.caption.weight(.semibold)).foregroundStyle(Theme.dim)
+                    Text("Surprise").font(.system(size: 44, weight: .heavy))
+                    Text(model.recommender.hasHistory
+                         ? "Learns from the \(model.recommender.playedCount) songs you've played: what you play next, the genre, and what you like at this time of day."
+                         : "Starts with your favourite genres and gets better the more you listen.")
+                        .font(.callout).foregroundStyle(Theme.dim).frame(maxWidth: 460, alignment: .leading)
+                    Button { model.startSurprise() } label: {
+                        Label(on ? "Shuffle Again" : "Play Surprise", systemImage: on ? "arrow.triangle.2.circlepath" : "play.fill")
+                    }
+                    .buttonStyle(PillButton(filled: true))
+                    .padding(.top, 4)
+                }
+            }
+            if on, let current = model.currentTrack {
+                Text("Now: \(current.title) — \(current.artist)").font(.callout.weight(.semibold))
+                if !upcoming.isEmpty {
+                    Text("Up next").font(.headline).padding(.top, 6)
+                    TrackList(tracks: upcoming)
+                }
+            }
+        }
     }
 }

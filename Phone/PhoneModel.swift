@@ -39,6 +39,9 @@ final class PhoneModel {
     let downloads = DownloadStore()
     let upcoming = UpcomingCache()
     let appleMusic: AppleMusicSync
+    /// On-device taste model (shared with the Mac when connected). Powers Surprise and Guess offline.
+    let recommender = Recommender()
+    @ObservationIgnored private lazy var recorder = ListeningRecorder(recommender)
     /// Playlist change history from the Mac, newest first.
     private(set) var history: [PlaylistVersion] = []
     /// Keep a Bluetooth link to the Mac open next to Wi‑Fi: commands go over
@@ -116,6 +119,7 @@ final class PhoneModel {
         session.onApplied = { [unowned self] in
             publish()
             prefetchUpcoming()
+            listenedOffline()
         }
         session.durationOf = { [unowned self] in track($0)?.duration ?? 0 }
         nowPlaying = NowPlayingBridge { [unowned self] in send($0) }
@@ -499,6 +503,9 @@ final class PhoneModel {
             ArtCache.shared.resetMisses()
             if let state = m.state { session.follow(state) }
             fetchCatalog()
+            // Swap listening history with the Mac (plays made offline go up, the Mac's come down).
+            recommender.saveNow()
+            transmit(Message(type: "taste", text: String(decoding: recommender.export(), as: UTF8.self)))
             if viaNearby {
                 retryLater()
             } else if bluetoothBackup {
@@ -511,6 +518,8 @@ final class PhoneModel {
             } else {
                 nearby.disconnect()
             }
+        case "taste":
+            if let text = m.text { recommender.merge(Data(text.utf8)) }
         case "denied":
             link = .needsPIN
         case "state":
@@ -588,8 +597,44 @@ final class PhoneModel {
     }
 
     /// Applies (or lifts) duplicate hiding to songs, albums and playlists.
+    /// Surprise and Guess. From the Mac while connected; worked out on this device offline.
+    var forYou: [Playlist] {
+        if isLinked {
+            return rawCatalog.playlists.filter { $0.subtitle?.hasPrefix("auto") == true }
+        }
+        let local = downloads.tracks
+        return [
+            Playlist(id: "auto-surprise", name: "Surprise", subtitle: "auto", trackIDs: []),
+            Playlist(id: "auto-guess", name: "Guess", subtitle: "auto · \(Recommender.moment())",
+                     trackIDs: recommender.guess(tracks: local)),
+        ]
+    }
+
+    /// Starts Surprise: on the Mac when connected, otherwise from this device's downloads.
+    func startSurprise() {
+        activateAudio()
+        if isLinked {
+            send(Command(action: "surprise"))
+        } else if let first = recommender.surpriseNext(after: session.state.currentID, recent: recorder.recent,
+                                                         tracks: downloads.tracks) {
+            session.perform(Command(action: "play", ids: [first], index: 0, text: "surprise"))
+        }
+    }
+
+    /// Offline (this device is in charge): learn from what plays and keep Surprise topped up.
+    private func listenedOffline() {
+        guard !session.isFollower else { return }
+        let state = session.state
+        recorder.observe(id: state.currentID, playing: state.isPlaying) { [unowned self] in track($0)?.duration ?? 0 }
+        guard state.radio == "surprise", state.queue.count - state.index <= 2,
+              let next = recommender.surpriseNext(after: state.queue.last, recent: recorder.recent + state.queue,
+                                                  tracks: downloads.tracks) else { return }
+        session.perform(Command(action: "enqueue", ids: [next]))
+    }
+
     private func rebuildLists() {
-        let catalog = rawCatalog
+        var catalog = rawCatalog
+        catalog.playlists.removeAll { $0.subtitle?.hasPrefix("auto") == true }
         guard hideDuplicates, !duplicates.isEmpty else {
             macTracks = catalog.tracks
             macAlbums = catalog.albums

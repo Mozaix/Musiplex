@@ -54,6 +54,12 @@ final class Server {
 
     /// Asks the app to add a playlist to Apple Music (sent from a phone).
     @ObservationIgnored var onExport: ((String) -> Void)?
+    /// A device asked to start Surprise.
+    @ObservationIgnored var onSurprise: (() -> Void)?
+    /// A device sent its listening history (plays made offline).
+    @ObservationIgnored var onTaste: ((Data) -> Void)?
+    /// This Mac's listening history, sent to devices so their offline Guess knows you.
+    @ObservationIgnored var tasteData: (() -> Data)?
     @ObservationIgnored private let token: String
     @ObservationIgnored private let http: HTTPServer
     @ObservationIgnored private let nearby: NearbyHost
@@ -249,6 +255,7 @@ final class Server {
                 if seenSeqs[key]!.count > 64 { seenSeqs[key]!.removeFirst(32) }
             }
             if command.action == "device", !devices.contains(where: { $0.id == command.text }) { return }
+            if command.action == "surprise" { onSurprise?(); return }
             session.perform(command)
         case "playlist":
             // Edit one of your playlists (text = playlist ID): add `ids`, remove
@@ -265,6 +272,10 @@ final class Server {
                 let given = m.text.flatMap { $0.hasPrefix("my-") ? $0 : nil }
                 library.createPlaylist(named: m.name ?? "New Playlist", with: ids, id: given, source: source)
             }
+        case "taste":
+            guard clients[i].authed, let text = m.text else { return }
+            onTaste?(Data(text.utf8))
+            if let data = tasteData?() { send(Message(type: "taste", text: String(decoding: data, as: UTF8.self)), to: clients[i]) }
         case "revert":
             guard clients[i].authed, let n = m.text.flatMap(Int.init) else { return }
             library.revert(n, source: clients[i].name)

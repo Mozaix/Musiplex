@@ -198,6 +198,7 @@ final class SessionController {
             state.index = i
             state.isPlaying = true
             seek = 0
+            state.radio = c.text == "surprise" ? "surprise" : nil
         case "jump":
             guard let i = c.index, state.queue.indices.contains(i) else { return }
             state.index = i

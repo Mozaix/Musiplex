@@ -127,6 +127,29 @@ Follow these in order.
   - Apple doesn't let apps remove songs from Apple Music playlists. So removing a song in Apple Music removes it from Musiplex, but not the other way round.
   - Songs are matched by title and artist, so only songs that exist on both sides can be synced.
 
+## Surprise & Guess (on-device recommendations)
+
+Musiplex learns what you like from what you play, entirely on your own devices. There's no account, no cloud and no machine-learning model, just small counts:
+
+- **Plays and skips per song.** A skip is leaving within 30 seconds and before 40% of the song.
+- **When you listen:** hour of day and day of week.
+- **What you play next:** which songs tend to follow which.
+
+That's a few hundred bytes per song you've played. On a 929-song library with 20,000 plays of history, it uses under 3 MB of memory, and picking a song takes about 0.3 ms.
+
+- **Surprise:** a playlist with no songs. Press play and it picks the next song as it goes, using:
+  - songs you often play after the current one
+  - the same genre or artist
+  - what you like at this time of day
+  - a little discovery
+  - never something you heard in the last few hours
+- **Guess:** a playlist made for right now (for example "Tuesday evening"), from the songs and genres you play at this hour on this kind of day. It refreshes every hour.
+- **Your Taste** (Mac Settings): your genres, plus songs in your library you haven't played yet that fit them.
+- **iPhone and iPad:** they swap listening history with the Mac each time they connect. Offline, Surprise and Guess run on the device itself, using your downloaded songs.
+- **Genres:** read from the Music app and your files' tags. Songs with no tag borrow their artist's genre.
+  - If your library has no genre tags at all, you can turn on **Find genres online** in Settings.
+  - It looks up each artist once on Apple's public music search, and only artist names are sent. It's off by default.
+
 ## Playlists, queue, mini player and Floating
 
 - **Order:** new playlists appear at the top.

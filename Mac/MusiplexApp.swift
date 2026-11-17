@@ -39,6 +39,13 @@ final class AppModel {
     }
     @ObservationIgnored private var nowPlaying: NowPlayingBridge?
 
+    /// Learns from what you play; powers Surprise and Guess. Runs on this Mac only.
+    let recommender = Recommender()
+    let genreLookup = GenreLookup()
+    @ObservationIgnored private(set) var recorder: ListeningRecorder!
+    @ObservationIgnored private var guessHour = -1
+    @ObservationIgnored private var guessTimer: Timer?
+
     /// Re-send your playlists to the Music app whenever they change.
     var autoPushToAppleMusic = UserDefaults.standard.bool(forKey: "autoPushAppleMusic") {
         didSet { UserDefaults.standard.set(autoPushToAppleMusic, forKey: "autoPushAppleMusic") }
@@ -60,8 +67,10 @@ final class AppModel {
         let bridge = NowPlayingBridge { session.perform($0) }
         nowPlaying = bridge
         session.onChange = { server.broadcast($0) }
+        recorder = ListeningRecorder(recommender)
         session.onApplied = { [weak self] in
             self?.notch?.refresh()
+            self?.listened()
             bridge.update(track: library.track(session.state.currentID),
                           position: session.livePosition, playing: session.state.isPlaying)
             UserDefaults.standard.set(session.state.volume, forKey: "volume")
@@ -75,6 +84,22 @@ final class AppModel {
         server.start()
         remote.start()
         library.setUpSongsFolders()
+        server.onSurprise = { [weak self] in self?.startSurprise() }
+        server.onTaste = { [weak self] data in self?.recommender.merge(data) }
+        server.tasteData = { [weak self] in self?.recommender.export() ?? Data() }
+        library.artistGenres = genreLookup.genres
+        genreLookup.artists = { [library] in library.tracks.map(\.artist) }
+        genreLookup.onUpdate = { [weak self] genres in
+            self?.library.artistGenres = genres
+            self?.refreshGuess(force: true)
+        }
+        genreLookup.start()
+        refreshGuess(force: true)
+        // Re-guess at the top of each hour (one cheap timer, ±1 min tolerance).
+        guessTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshGuess() }
+        }
+        guessTimer?.tolerance = 60
         library.onPlaylistsEdited = { [weak self] ids in self?.queueAutoPush(ids) }
         notch = NotchController(model: self)
         if let folder = UserDefaults.standard.string(forKey: "notchSnapshot") {
@@ -159,6 +184,34 @@ final class AppModel {
                 sendToAppleMusic(list, quiet: true)
             }
         }
+    }
+
+    // MARK: Surprise & Guess
+
+    /// Tells the recorder about play/pause/song changes, and keeps Surprise topped up.
+    private func listened() {
+        let state = session.state
+        recorder.observe(id: state.currentID, playing: state.isPlaying) { [library] in library.track($0)?.duration ?? 0 }
+        guard state.radio == "surprise", state.queue.count - state.index <= 2 else { return }
+        if let next = recommender.surpriseNext(after: state.queue.last, recent: recorder.recent + state.queue,
+                                               tracks: library.tracks) {
+            session.perform(Command(action: "enqueue", ids: [next]))
+        }
+    }
+
+    /// Starts Surprise: one song now, more picked as it plays.
+    func startSurprise() {
+        guard let first = recommender.surpriseNext(after: session.state.currentID, recent: recorder.recent,
+                                                   tracks: library.tracks) else { return }
+        session.perform(Command(action: "play", ids: [first], index: 0, text: "surprise"))
+    }
+
+    /// Rebuilds Guess when the hour changes (or the library first loads).
+    func refreshGuess(force: Bool = false) {
+        let hour = Calendar.current.component(.hour, from: Date())
+        guard force || hour != guessHour || library.forYou.isEmpty else { return }
+        guessHour = hour
+        library.setForYou(guess: recommender.guess(tracks: library.tracks), moment: Recommender.moment())
     }
 
     // MARK: Mini player

@@ -53,6 +53,20 @@ final class LibraryStore {
     /// Track ID → the Music app's persistent ID, for sending playlists to Apple Music.
     @ObservationIgnored private(set) var musicIDs: [String: String] = [:]
     @ObservationIgnored private let userPlaylistsURL: URL
+    /// "Surprise" (no songs: picks as it goes) and "Guess" (for this time of day).
+    private(set) var forYou: [LibraryPlaylist] = []
+
+    func setForYou(guess: [String], moment: String) {
+        let guessTracks = guess.compactMap { byID[$0] }
+        forYou = [
+            LibraryPlaylist(id: "auto-surprise", name: "Surprise", tracks: []),
+            LibraryPlaylist(id: "auto-guess", name: "Guess", tracks: guessTracks),
+        ]
+        guessMoment = moment
+        onChange?()
+    }
+    private(set) var guessMoment = ""
+
     /// Every playlist edit, newest first (1.1, 1.2, …).
     private(set) var history: [PlaylistVersion] = []
     @ObservationIgnored private let historyURL: URL
@@ -66,6 +80,8 @@ final class LibraryStore {
         var path: String
         var mtime: Double
         var musicID: String? = nil
+        /// The file's tags were checked for a genre (so it isn't re-read every scan).
+        var genreChecked: Bool? = nil
     }
 
     private struct Index: Codable {
@@ -167,6 +183,7 @@ final class LibraryStore {
         var added: Double?
         var artwork: Data?
         var musicID: String
+        var genre: String?
     }
 
     func rescan() {
@@ -195,7 +212,8 @@ final class LibraryStore {
                         album: item.album.title ?? "Unknown Album", duration: Double(item.totalTime) / 1000,
                         added: item.addedDate?.timeIntervalSince1970,
                         artwork: needsArt ? item.artwork?.imageData : nil,
-                        musicID: String(format: "%016llX", item.persistentID.uint64Value))
+                        musicID: String(format: "%016llX", item.persistentID.uint64Value),
+                        genre: item.genre.isEmpty ? nil : item.genre)
                     musicOrder.append(path)
                 }
                 for list in lib.allPlaylists where !list.isMaster && list.distinguishedKind == .kindNone
@@ -239,6 +257,13 @@ final class LibraryStore {
                 let mtime = values.contentModificationDate?.timeIntervalSince1970 ?? 0
                 if var hit = known[path], hit.mtime == mtime {
                     hit.musicID = musicItems[normal]?.musicID ?? hit.musicID
+                    if let info = musicItems[normal] {
+                        hit.track.genre = info.genre
+                    } else if hit.genreChecked != true {
+                        // Added before genres were read: read just the genre tag once.
+                        hit.track.genre = await Self.genre(of: file.url)
+                        hit.genreChecked = true
+                    }
                     result.append(hit)
                     continue
                 }
@@ -308,8 +333,8 @@ final class LibraryStore {
         if let art = info.artwork { writeThumbnail(art, to: artDir.appendingPathComponent("\(id).jpg")) }
         let track = Track(id: id, title: info.title, artist: info.artist, album: info.album,
                           duration: info.duration, ext: (path as NSString).pathExtension.lowercased(),
-                          size: size, addedAt: info.added ?? added)
-        return Entry(track: track, path: path, mtime: mtime, musicID: info.musicID)
+                          size: size, addedAt: info.added ?? added, genre: info.genre)
+        return Entry(track: track, path: path, mtime: mtime, musicID: info.musicID, genreChecked: true)
     }
 
     private nonisolated static func read(_ url: URL, root: String?, mtime: Double, size: Int64,
@@ -353,8 +378,27 @@ final class LibraryStore {
         let seconds = duration.seconds
         let track = Track(id: id, title: title, artist: artist, album: album,
                           duration: seconds.isFinite ? seconds : 0,
-                          ext: url.pathExtension.lowercased(), size: size, addedAt: added)
-        return Entry(track: track, path: url.path, mtime: mtime)
+                          ext: url.pathExtension.lowercased(), size: size, addedAt: added,
+                          genre: await genre(of: url))
+        return Entry(track: track, path: url.path, mtime: mtime, genreChecked: true)
+    }
+
+    /// The genre tag (ID3 TCON, iTunes ©gen / gnre, QuickTime genre).
+    private nonisolated static func genre(of url: URL) async -> String? {
+        let asset = AVURLAsset(url: url)
+        guard let meta = try? await asset.load(.metadata) else { return nil }
+        let ids: [AVMetadataIdentifier] = [.id3MetadataContentType, .iTunesMetadataUserGenre, .quickTimeMetadataGenre,
+                                           .iTunesMetadataPredefinedGenre]
+        for id in ids {
+            guard let item = AVMetadataItem.metadataItems(from: meta, filteredByIdentifier: id).first else { continue }
+            if let text = try? await item.load(.stringValue) {
+                // ID3 sometimes stores "(13)" or "(13)Pop": keep the words, drop numeric codes.
+                let clean = text.replacingOccurrences(of: #"\(\d+\)"#, with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !clean.isEmpty { return clean }
+            }
+        }
+        return nil
     }
 
     private nonisolated static func writeThumbnail(_ data: Data, to url: URL) {
@@ -371,10 +415,20 @@ final class LibraryStore {
         CGImageDestinationFinalize(dest)
     }
 
+    /// Genres looked up per artist (used for songs without a genre tag).
+    @ObservationIgnored var artistGenres: [String: String] = [:] {
+        didSet { if !entries.isEmpty { install(entries, save: false) } }
+    }
+
     private func install(_ new: [Entry], save: Bool) {
         entries = new
         paths = Dictionary(new.map { ($0.track.id, $0.path) }, uniquingKeysWith: { a, _ in a })
-        let all = Dictionary(new.map { ($0.track.id, $0.track) }, uniquingKeysWith: { a, _ in a })
+        let looked = artistGenres
+        let all = Dictionary(new.map { e -> (String, Track) in
+            var t = e.track
+            if t.genre == nil, let g = looked[GenreLookup.primary(t.artist)], !g.isEmpty { t.genre = g }
+            return (t.id, t)
+        }, uniquingKeysWith: { a, _ in a })
         byID = all
         // Ignore hides whose kept copy has gone missing, so a song is never lost.
         let hidden = self.hidden.filter { all[$0.value] != nil }
@@ -687,7 +741,9 @@ final class LibraryStore {
     var catalog: Catalog {
         Catalog(tracks: tracks,
                 albums: albums.map { Playlist(id: $0.id, name: $0.title, subtitle: $0.artist, trackIDs: $0.tracks.map(\.id)) },
-                playlists: playlists.map { Playlist(id: $0.id, name: $0.name, subtitle: $0.editable ? "mine" : nil, trackIDs: $0.tracks.map(\.id)) },
+                playlists: forYou.map { Playlist(id: $0.id, name: $0.name, subtitle: $0.id == "auto-guess" ? "auto · \(guessMoment)" : "auto",
+                                                trackIDs: $0.tracks.map(\.id)) }
+                    + playlists.map { Playlist(id: $0.id, name: $0.name, subtitle: $0.editable ? "mine" : nil, trackIDs: $0.tracks.map(\.id)) },
                 history: Array(history.prefix(100)))
     }
 }

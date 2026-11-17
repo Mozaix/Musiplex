@@ -96,7 +96,7 @@ struct PhoneRoot: View {
                         CollectionScreen(list: album, kind: "Album")
                     }
                 case .playlist(let id):
-                    if let list = model.playlists.first(where: { $0.id == id }) {
+                    if let list = model.playlists.first(where: { $0.id == id }) ?? model.forYou.first(where: { $0.id == id }) {
                         CollectionScreen(list: list, kind: "Playlist")
                     }
                 }
@@ -162,6 +162,7 @@ struct PhoneRoot: View {
             }
             .padding(.horizontal, 16)
         case .playlists:
+            ForYouCards()
             if model.isLinked {
                 HStack(spacing: 10) {
                     Button { model.newPlaylistIDs = [] } label: {
@@ -757,6 +758,49 @@ struct MiniPlayer: View {
         .padding(.horizontal, 10).padding(.bottom, 6)
         .contentShape(Rectangle())
     }
+}
+
+/// Surprise (picks as it plays) and Guess (for this time of day), side by side.
+struct ForYouCards: View {
+    @Environment(PhoneModel.self) private var model
+
+    var body: some View {
+        let guess = model.forYou.first { $0.id == "auto-guess" }
+        HStack(spacing: 10) {
+            Button {
+                model.startSurprise()
+                model.showPlayer = true
+            } label: {
+                card("Surprise", "sparkles", "Picks as it plays")
+            }
+            .buttonStyle(.plain)
+            .disabled(!model.isLinked && model.downloads.tracks.isEmpty)
+            if let guess {
+                NavigationLink(value: PhoneRoute.playlist(guess.id)) {
+                    card("Guess", "wand.and.stars",
+                         (guess.subtitle ?? "").replacingOccurrences(of: "auto · ", with: "").capitalizedFirst)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 16).padding(.bottom, 12)
+    }
+
+    private func card(_ title: String, _ icon: String, _ subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Image(systemName: icon).font(.title3.weight(.bold)).foregroundStyle(.black)
+            Spacer(minLength: 0)
+            Text(title).font(.headline).foregroundStyle(.black)
+            Text(subtitle).font(.caption).foregroundStyle(.black.opacity(0.7)).lineLimit(1)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 110, alignment: .leading)
+        .background(Theme.gradient, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+extension String {
+    var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
 }
 
 /// Drag playlists into the order you want; saved on your Mac for every device.

@@ -9,6 +9,8 @@ struct Track: Codable, Identifiable, Hashable {
     var ext: String
     var size: Int64
     var addedAt: Double
+    /// From the file's tags or the Music app (nil when there's none).
+    var genre: String? = nil
 }
 
 /// A named, ordered list of tracks: a playlist, or an album in the catalog.
@@ -105,6 +107,8 @@ struct SessionState: Codable, Equatable {
     var crossfade: Double = 0
     /// How long the most recent song change fades (crossfade on auto-advance, 0 for skips).
     var fade: Double = 0
+    /// "surprise" while Surprise is picking songs as it goes.
+    var radio: String? = nil
 
     var currentID: String? { queue.indices.contains(index) ? queue[index] : nil }
 }
