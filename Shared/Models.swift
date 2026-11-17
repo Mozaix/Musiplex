@@ -37,6 +37,9 @@ struct PlaylistChange: Codable, Hashable {
     var songs: [String] = []
     /// Old name for a rename.
     var detail: String? = nil
+    /// Which playlist and which song IDs, so the change can be reverted.
+    var playlistID: String? = nil
+    var ids: [String]? = nil
 }
 
 /// A numbered snapshot of playlist edits (1.1, 1.2, …): when, from which
@@ -47,6 +50,8 @@ struct PlaylistVersion: Codable, Identifiable, Hashable {
     /// Where the edit came from: "This Mac", "Hosam's iPhone", "Apple Music on Hosam's iPhone".
     var source: String
     var changes: [PlaylistChange]
+    /// Set when this version undid another one.
+    var reverts: Int? = nil
 
     var id: Int { number }
     var label: String { "1.\(number)" }
@@ -62,6 +67,7 @@ struct PlaylistVersion: Codable, Identifiable, Hashable {
         for c in changes where c.kind == .deleted { parts.append("deleted “\(c.playlist)”") }
         let lists = Set(changes.map(\.playlist))
         if (added > 0 || removed > 0), lists.count == 1, let name = lists.first { parts.append("in “\(name)”") }
+        if let reverts { parts.insert("Undid 1.\(reverts)", at: 0) }
         return parts.isEmpty ? "No changes" : parts.joined(separator: " · ")
     }
 }

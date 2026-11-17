@@ -29,7 +29,6 @@ final class HTTPServer: @unchecked Sendable {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         let params = NWParameters(tls: nil, tcp: tcp)
-        params.includePeerToPeer = true
         params.serviceClass = .responsiveData
         let listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: UInt16(port))!)
         listener.newConnectionHandler = { [weak self] conn in

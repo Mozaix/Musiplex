@@ -41,9 +41,11 @@ struct VersionHistoryCard: View {
 }
 
 private struct VersionRow: View {
+    @Environment(AppModel.self) private var model
     let version: PlaylistVersion
     let open: Bool
     let toggle: () -> Void
+    @State private var confirm = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -77,8 +79,26 @@ private struct VersionRow: View {
                         ChangeDetail(change: change)
                     }
                 }
-                .padding(.leading, 56).padding(.bottom, 12)
+                .padding(.leading, 56)
                 .transition(.opacity)
+                Button { confirm = true } label: {
+                    Label("Revert this version", systemImage: "arrow.uturn.backward")
+                        .font(.callout.weight(.semibold))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(Theme.accent)
+                .padding(.leading, 56).padding(.bottom, 12)
+                .confirmationDialog("Revert version \(version.label)?", isPresented: $confirm) {
+                    Button("Revert") {
+                        if model.library.revert(version.number) {
+                            model.show("Reverted \(version.label)")
+                        } else {
+                            model.show("Nothing to revert: \(version.label) is already undone.")
+                        }
+                    }
+                } message: {
+                    Text("Undoes exactly what changed in \(version.label). Your other edits stay. The undo is saved as a new version, so you can revert it too.")
+                }
             }
         }
     }

@@ -129,7 +129,9 @@ Follow these in order.
 
 ## Connection: Bluetooth backup
 
-The phone keeps a Bluetooth link to the Mac open alongside Wi‑Fi (**Settings → Connection**). Play, pause and skip go over both links, and the Mac runs each command only once. If Wi‑Fi drops, control switches to Bluetooth straight away.
+Turn on **Settings → Connection → Bluetooth backup link** to keep a Bluetooth link to the Mac open alongside Wi‑Fi. Play, pause and skip go over both links, and the Mac runs each command only once. If Wi‑Fi drops, control switches to Bluetooth straight away.
+
+It's **off by default**. Keeping Bluetooth and peer-to-peer Wi‑Fi busy makes Wi‑Fi briefly hop away from your router, which can cause the odd stutter while streaming. When the phone is connected over Wi‑Fi and the backup is off, Musiplex switches Bluetooth scanning off on both devices.
 
 You can't merge Bluetooth and Wi‑Fi into one faster connection: Bluetooth adds only about 2 Mbit/s next to Wi‑Fi's hundreds. So Bluetooth is used for reliability, not speed.
 

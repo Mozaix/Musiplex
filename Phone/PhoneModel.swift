@@ -11,7 +11,9 @@ final class PhoneModel {
     /// peer-to-peer (control + downloads, downloaded songs only for audio).
     enum Link: Equatable { case searching, connecting, needsPIN, wifi, nearby, offline }
 
-    private(set) var link: Link = .searching
+    private(set) var link: Link = .searching {
+        didSet { if link != oldValue { updateRadios() } }
+    }
     private(set) var macName = "Mac"
     private(set) var macTracks: [Track] = []
     private(set) var macAlbums: [Playlist] = []
@@ -41,10 +43,18 @@ final class PhoneModel {
     private(set) var history: [PlaylistVersion] = []
     /// Keep a Bluetooth link to the Mac open next to Wi‑Fi: commands go over
     /// both, and if Wi‑Fi drops, playback control carries on instantly.
-    var bluetoothBackup = UserDefaults.standard.object(forKey: "bluetoothBackup") as? Bool ?? true {
+    var bluetoothBackup = UserDefaults.standard.object(forKey: "bluetoothBackup") as? Bool ?? false {
         didSet {
             UserDefaults.standard.set(bluetoothBackup, forKey: "bluetoothBackup")
-            if bluetoothBackup { if link == .wifi { nearby.connect() } } else if !viaNearby { nearby.disconnect(); hasBackup = false }
+            updateRadios()
+            if bluetoothBackup {
+                if link == .wifi { nearby.connect() }
+            } else if !viaNearby {
+                nearby.disconnect()
+                hasBackup = false
+            }
+            // Tell the Mac (it only advertises over Bluetooth when needed).
+            if link == .wifi { hello(pin: nil) }
         }
     }
     /// The Bluetooth standby link is up.
@@ -419,7 +429,16 @@ final class PhoneModel {
     // MARK: Messages
 
     private func hello(pin: String?) {
-        transmit(Message(type: "hello", token: token, pin: pin, name: UIDevice.current.name, deviceID: deviceID, kind: kind))
+        // seq = 1 tells the Mac this device wants a Bluetooth standby link.
+        transmit(Message(type: "hello", token: token, pin: pin, name: UIDevice.current.name, deviceID: deviceID, kind: kind,
+                         seq: bluetoothBackup ? 1 : 0))
+    }
+
+    /// Bluetooth / peer-to-peer scanning only while it can help: not connected
+    /// yet, or keeping a standby link. On Wi‑Fi without standby it's off, so it
+    /// can't interfere with streaming.
+    private func updateRadios() {
+        nearby.setBrowsing(link != .wifi || bluetoothBackup)
     }
 
     func submit(pin: String) {
@@ -708,6 +727,11 @@ final class PhoneModel {
 
     func renamePlaylist(_ playlistID: String, to name: String) {
         transmit(Message(type: "playlist", name: name, text: playlistID))
+    }
+
+    /// Asks the Mac to undo one version of your playlists.
+    func revert(_ version: PlaylistVersion) {
+        transmit(Message(type: "revert", text: String(version.number)))
     }
 
     func deletePlaylist(_ playlistID: String) {

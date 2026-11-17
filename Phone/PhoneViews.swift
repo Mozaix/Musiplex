@@ -260,6 +260,7 @@ struct PhoneRoot: View {
 struct HistoryList: View {
     @Environment(PhoneModel.self) private var model
     @State private var open: Set<Int> = []
+    @State private var reverting: PlaylistVersion?
 
     var body: some View {
         if model.history.isEmpty {
@@ -272,6 +273,14 @@ struct HistoryList: View {
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 32).padding(.vertical, 60)
         }
+        Color.clear.frame(height: 0)
+            .confirmationDialog("Revert version \(reverting?.label ?? "")?",
+                                isPresented: Binding(get: { reverting != nil }, set: { if !$0 { reverting = nil } }),
+                                titleVisibility: .visible) {
+                Button("Revert") { if let v = reverting { model.revert(v) } }
+            } message: {
+                Text("Undoes exactly what changed in that version, on your Mac and all your devices. It's saved as a new version, so you can undo the revert too.")
+            }
         ForEach(model.history) { version in
             let isOpen = open.contains(version.number)
             VStack(alignment: .leading, spacing: 10) {
@@ -305,6 +314,16 @@ struct HistoryList: View {
                         }
                     }
                     .padding(.leading, 8)
+                    if model.isLinked {
+                        Button { reverting = version } label: {
+                            Label("Revert this version", systemImage: "arrow.uturn.backward")
+                                .font(.subheadline.weight(.semibold))
+                                .padding(.horizontal, 14).padding(.vertical, 8)
+                                .background(Theme.accent.opacity(0.18), in: Capsule())
+                                .foregroundStyle(Theme.accent)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
             .padding(14)
@@ -903,7 +922,7 @@ struct LinkSheet: View {
                                     .font(.footnote).foregroundStyle(.secondary)
                             }
                         }
-                        Button("Sync Now") { model.appleMusic.schedule() }.disabled(!model.isLinked)
+                        Button("Sync Now") { model.appleMusic.syncNow() }.disabled(!model.isLinked)
                     }
                 } header: {
                     Text("Apple Music")
@@ -918,7 +937,7 @@ struct LinkSheet: View {
                 } header: {
                     Text("Connection")
                 } footer: {
-                    Text("Keeps a Bluetooth link to your Mac open next to Wi‑Fi. Play, pause and skip are sent over both, and if Wi‑Fi drops, control switches over instantly. Uses a little more battery.")
+                    Text("Keeps a Bluetooth link to your Mac open next to Wi‑Fi. Play, pause and skip are sent over both, and if Wi‑Fi drops, control switches over instantly. Off by default: keeping Bluetooth and peer-to-peer Wi‑Fi busy uses more battery and can cause the odd stutter while streaming.")
                 }
                 Section {
                     TextField("100.x.y.z or mac-name.tailnet.ts.net", text: $model.remoteHost)

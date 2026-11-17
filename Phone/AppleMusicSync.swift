@@ -39,6 +39,8 @@ final class AppleMusicSync {
     }
 
     @ObservationIgnored private var links: [Link] = []
+    /// What the last sync saw; if nothing changed since, the next one is skipped.
+    @ObservationIgnored private var lastFingerprint: Int?
     @ObservationIgnored private var running = false
     @ObservationIgnored private var again = false
     @ObservationIgnored private var debounce: Task<Void, Never>?
@@ -73,6 +75,12 @@ final class AppleMusicSync {
         }
     }
 
+    /// Sync now even if nothing seems to have changed.
+    func syncNow() {
+        lastFingerprint = nil
+        schedule()
+    }
+
     /// Runs a sync shortly (several triggers in a row become one sync).
     func schedule() {
         debounce?.cancel()
@@ -86,6 +94,15 @@ final class AppleMusicSync {
     func run() async {
         guard enabled, authorized, let input = source?(), let send else { return }
         if running { again = true; return }
+        // Cheap check first: skip the library scan when neither side changed.
+        var hasher = Hasher()
+        hasher.combine(MPMediaLibrary.default().lastModifiedDate)
+        hasher.combine(input.tracks.count)
+        for list in input.playlists where list.subtitle == "mine" || list.id.hasPrefix("my-") {
+            hasher.combine(list.id); hasher.combine(list.name); hasher.combine(list.trackIDs)
+        }
+        let fingerprint = hasher.finalize()
+        if fingerprint == lastFingerprint { return }
         running = true
         defer {
             running = false
@@ -186,6 +203,7 @@ final class AppleMusicSync {
 
         links = next
         linkedCount = next.count
+        lastFingerprint = fingerprint
         notInAppleMusic = missing
         lastSync = Date()
         if let data = try? JSONEncoder().encode(next) { try? data.write(to: fileURL, options: .atomic) }

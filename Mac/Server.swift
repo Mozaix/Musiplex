@@ -19,6 +19,8 @@ final class Server {
         /// (Bluetooth next to Wi‑Fi). Commands may arrive on both; if the main
         /// link drops, this one takes over instantly.
         var backup = false
+        /// This device keeps a Bluetooth standby link next to Wi‑Fi.
+        var wantsBackup = false
         let conn: NWConnection?
         let peer: MCPeerID?
 
@@ -97,8 +99,8 @@ final class Server {
             let tcp = NWProtocolTCP.Options()
             tcp.noDelay = true
             let params = NWParameters(tls: nil, tcp: tcp)
-            // Also reachable over peer-to-peer Wi‑Fi (the link AirDrop uses).
-            params.includePeerToPeer = true
+            // Not on peer-to-peer Wi‑Fi: keeping that link busy makes Wi‑Fi hop
+            // channels, which causes audio dropouts.
             params.serviceClass = .interactiveVoice
             let ws = NWProtocolWebSocket.Options()
             ws.autoReplyPing = true
@@ -227,6 +229,7 @@ final class Server {
             guard let j = clients.firstIndex(where: { $0.id == id }) else { return }
             clients[j].authed = true
             clients[j].backup = false
+            clients[j].wantsBackup = m.seq == 1
             clients[j].name = m.name ?? "iPhone"
             clients[j].kind = m.kind ?? "iphone"
             clients[j].deviceID = deviceID
@@ -262,6 +265,9 @@ final class Server {
                 let given = m.text.flatMap { $0.hasPrefix("my-") ? $0 : nil }
                 library.createPlaylist(named: m.name ?? "New Playlist", with: ids, id: given, source: source)
             }
+        case "revert":
+            guard clients[i].authed, let n = m.text.flatMap(Int.init) else { return }
+            library.revert(n, source: clients[i].name)
         case "deletePlaylist":
             guard clients[i].authed, let id = m.text else { return }
             library.deletePlaylist(id, source: m.source ?? clients[i].name)
@@ -324,6 +330,11 @@ final class Server {
 
     private func devicesChanged() {
         updateTicker()
+        // Advertise over Bluetooth only while it's useful: nobody is on Wi‑Fi,
+        // or a device asked for a Bluetooth standby link. Otherwise Bluetooth /
+        // peer-to-peer radios stay quiet (less Wi‑Fi interference, no stutter).
+        let wifiPhones = phones.filter { !$0.nearby }
+        nearby.setAdvertising(wifiPhones.isEmpty || clients.contains { $0.wantsBackup || $0.backup })
         let message = Message(type: "devices", devices: devices)
         phones.forEach { send(message, to: $0) }
     }
@@ -413,12 +424,20 @@ final class NearbyHost: NSObject, MCSessionDelegate, MCNearbyServiceAdvertiserDe
         session.delegate = self
     }
 
+    private var advertising = false
+
     func start() {
         guard advertiser == nil else { return }
         let advertiser = MCNearbyServiceAdvertiser(peer: peerID, discoveryInfo: ["app": "musiplex"], serviceType: Net.nearbyService)
         advertiser.delegate = self
-        advertiser.startAdvertisingPeer()
         self.advertiser = advertiser
+        setAdvertising(true)
+    }
+
+    func setAdvertising(_ on: Bool) {
+        guard let advertiser, on != advertising else { return }
+        advertising = on
+        if on { advertiser.startAdvertisingPeer() } else { advertiser.stopAdvertisingPeer() }
     }
 
     func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didNotStartAdvertisingPeer error: Error) {

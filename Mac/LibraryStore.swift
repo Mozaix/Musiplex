@@ -415,8 +415,12 @@ final class LibraryStore {
             return LibraryPlaylist(id: list.id, name: list.name, tracks: items, editable: editable)
         }
         let byName: (LibraryPlaylist, LibraryPlaylist) -> Bool = { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        // An Apple Music (or .m3u) playlist with the same name as one of yours is
+        // the same playlist synced in from your iPhone: show it once, as yours.
+        func key(_ name: String) -> String { name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        let mine = Set(userPlaylists.map { key($0.name) })
         playlists = userPlaylists.compactMap { resolve($0, editable: true) }.sorted(by: byName)
-            + rawPlaylists.compactMap { resolve($0, editable: false) }.sorted(by: byName)
+            + rawPlaylists.filter { !mine.contains(key($0.name)) }.compactMap { resolve($0, editable: false) }.sorted(by: byName)
 
         if save, let data = try? JSONEncoder().encode(Index(entries: new, playlists: rawPlaylists)) {
             try? data.write(to: indexURL, options: .atomic)
@@ -439,7 +443,7 @@ final class LibraryStore {
         }
         let finalName = clean.isEmpty ? "New Playlist" : clean
         userPlaylists.append(Playlist(id: id, name: finalName, trackIDs: []))
-        record([PlaylistChange(playlist: finalName, kind: .created)], source: source)
+        record([PlaylistChange(playlist: finalName, kind: .created, playlistID: id)], source: source)
         if ids.isEmpty { saveUserPlaylists() } else { add(ids, toPlaylist: id, source: source) }
         return id
     }
@@ -454,7 +458,7 @@ final class LibraryStore {
             added.append(id)
         }
         guard !added.isEmpty else { return }
-        record([PlaylistChange(playlist: userPlaylists[i].name, kind: .added, songs: added.map(label))], source: source)
+        record([PlaylistChange(playlist: userPlaylists[i].name, kind: .added, songs: added.map(label), playlistID: id, ids: added)], source: source)
         saveUserPlaylists()
     }
 
@@ -468,7 +472,7 @@ final class LibraryStore {
         let removed = userPlaylists[i].trackIDs.filter { gone.contains(hidden[$0] ?? $0) }
         guard !removed.isEmpty else { return }
         userPlaylists[i].trackIDs.removeAll { gone.contains(hidden[$0] ?? $0) }
-        record([PlaylistChange(playlist: userPlaylists[i].name, kind: .removed, songs: removed.map(label))], source: source)
+        record([PlaylistChange(playlist: userPlaylists[i].name, kind: .removed, songs: removed.map(label), playlistID: id, ids: removed)], source: source)
         saveUserPlaylists()
     }
 
@@ -478,15 +482,55 @@ final class LibraryStore {
               userPlaylists[i].name != clean else { return }
         let old = userPlaylists[i].name
         userPlaylists[i].name = clean
-        record([PlaylistChange(playlist: clean, kind: .renamed, detail: old)], source: source)
+        record([PlaylistChange(playlist: clean, kind: .renamed, detail: old, playlistID: id)], source: source)
         saveUserPlaylists()
     }
 
     func deletePlaylist(_ id: String, source: String = "This Mac") {
         guard let list = userPlaylists.first(where: { $0.id == id }) else { return }
         userPlaylists.removeAll { $0.id == id }
-        record([PlaylistChange(playlist: list.name, kind: .deleted, songs: list.trackIDs.map(label))], source: source)
+        record([PlaylistChange(playlist: list.name, kind: .deleted, songs: list.trackIDs.map(label), playlistID: id, ids: list.trackIDs)], source: source)
         saveUserPlaylists()
+    }
+
+    @ObservationIgnored private var pendingRevert: Int?
+
+    /// Undoes one version: songs it added are taken out, songs it removed go
+    /// back in, a rename is renamed back, a created playlist is deleted and a
+    /// deleted one comes back. The undo is saved as a new version.
+    @discardableResult
+    func revert(_ number: Int, source: String = "This Mac") -> Bool {
+        guard let version = history.first(where: { $0.number == number }) else { return false }
+        // Resolve songs for versions saved before IDs were stored, by "Title — Artist".
+        let byLabel = Dictionary(tracks.map { ("\($0.title) — \($0.artist)", $0.id) }, uniquingKeysWith: { a, _ in a })
+        func ids(_ c: PlaylistChange) -> [String] { c.ids ?? c.songs.compactMap { byLabel[$0] } }
+        func playlistID(_ c: PlaylistChange) -> String? {
+            if let id = c.playlistID, userPlaylists.contains(where: { $0.id == id }) { return id }
+            return userPlaylists.first { $0.name == c.playlist }?.id
+        }
+        // Apply as one new version.
+        let before = history.first?.number
+        pendingRevert = number
+        let label = "\(source) · undo 1.\(number)"
+        for change in version.changes.reversed() {
+            switch change.kind {
+            case .added:
+                if let id = playlistID(change) { remove(ids(change), fromPlaylist: id, source: label) }
+            case .removed:
+                if let id = playlistID(change) { add(ids(change), toPlaylist: id, source: label) }
+            case .renamed:
+                if let id = playlistID(change), let old = change.detail { renamePlaylist(id, to: old, source: label) }
+            case .created:
+                if let id = playlistID(change) { deletePlaylist(id, source: label) }
+            case .deleted:
+                createPlaylist(named: change.playlist, with: ids(change), id: change.playlistID, source: label)
+            }
+            // Later changes in the same undo fold into the version just made.
+            if history.first?.number != before { pendingRevert = nil }
+        }
+        let changed = history.first?.number != before
+        pendingRevert = nil
+        return changed
     }
 
     private func label(_ id: String) -> String {
@@ -498,11 +542,15 @@ final class LibraryStore {
     /// two minutes) fold into one version instead of one version per song.
     private func record(_ changes: [PlaylistChange], source: String) {
         guard !changes.isEmpty else { return }
-        if var last = history.first, last.source == source, Date().timeIntervalSince(last.date) < 120 {
+        let folding = pendingRevert == nil && history.first.map {
+            $0.source == source && Date().timeIntervalSince($0.date) < 120 && ($0.reverts == nil || source.contains("undo"))
+        } ?? false
+        if folding, var last = history.first {
             for change in changes {
                 if change.kind == .added || change.kind == .removed,
                    let j = last.changes.firstIndex(where: { $0.playlist == change.playlist && $0.kind == change.kind }) {
                     last.changes[j].songs += change.songs
+                    last.changes[j].ids = (last.changes[j].ids ?? []) + (change.ids ?? [])
                 } else {
                     last.changes.append(change)
                 }
@@ -511,7 +559,8 @@ final class LibraryStore {
             history[0] = last
         } else {
             let next = (history.first?.number ?? 0) + 1
-            history.insert(PlaylistVersion(number: next, date: Date(), source: source, changes: changes), at: 0)
+            history.insert(PlaylistVersion(number: next, date: Date(), source: source, changes: changes, reverts: pendingRevert), at: 0)
+            pendingRevert = nil
             if history.count > 500 { history.removeLast(history.count - 500) }
         }
         let encoder = JSONEncoder()
@@ -529,6 +578,6 @@ final class LibraryStore {
         Catalog(tracks: tracks,
                 albums: albums.map { Playlist(id: $0.id, name: $0.title, subtitle: $0.artist, trackIDs: $0.tracks.map(\.id)) },
                 playlists: playlists.map { Playlist(id: $0.id, name: $0.name, subtitle: $0.editable ? "mine" : nil, trackIDs: $0.tracks.map(\.id)) },
-                history: Array(history.prefix(200)))
+                history: Array(history.prefix(100)))
     }
 }

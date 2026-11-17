@@ -28,7 +28,17 @@ final class NearbyClient: NSObject, MCSessionDelegate, MCNearbyServiceBrowserDel
         super.init()
         session.delegate = self
         browser.delegate = self
-        browser.startBrowsingForPeers()
+        setBrowsing(true)
+    }
+
+    private var browsing = false
+
+    /// Scanning keeps Bluetooth and peer-to-peer Wi‑Fi busy (which can make
+    /// streaming stutter), so it only runs while it might be needed.
+    func setBrowsing(_ on: Bool) {
+        guard on != browsing else { return }
+        browsing = on
+        if on { browser.startBrowsingForPeers() } else { browser.stopBrowsingForPeers(); found = nil }
     }
 
     var hasMacNearby: Bool { found != nil }

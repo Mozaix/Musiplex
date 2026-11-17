@@ -143,6 +143,7 @@ final class SessionController {
     @ObservationIgnored private var unshuffled: [String]?
     @ObservationIgnored private var anchorPos = 0.0
     @ObservationIgnored private var anchorAt = Date()
+    @ObservationIgnored private var loadedAt = Date.distantPast
 
     init(device: String) {
         self.device = device
@@ -327,8 +328,14 @@ final class SessionController {
             // Crossfade along with the Mac when it just moved to this song.
             let fade = position < state.fade + 1.5 ? state.fade : 0
             core.load(id: id, url: url, at: position, playing: state.isPlaying, fade: fade)
+            loadedAt = Date()
         } else {
-            if !core.isBuffering, abs(core.position - position) > 2 { core.seek(position) }
+            // Muted mirrors stay tight; the device you're listening on only
+            // jumps if it's well out (a small drift isn't worth an audible skip).
+            let limit = isAudibleHere ? 4.0 : 2.0
+            if !core.isBuffering, Date().timeIntervalSince(loadedAt) > 5, abs(core.position - position) > limit {
+                core.seek(position)
+            }
             core.setPlaying(state.isPlaying)
         }
     }
