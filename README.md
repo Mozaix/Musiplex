@@ -55,25 +55,83 @@ The phone pairs with one Mac at a time. The first time it connects to a new Mac,
 
 ---
 
-## Tailscale: listen from anywhere
+## Listen from anywhere: Tailscale, from scratch
 
-Tailscale puts your Mac and phone on a private network that works anywhere. Musiplex sees it as just another network.
+Tailscale makes a private network between your Mac and your phone that works from anywhere: school, the gym, mobile data. Musiplex then reaches your Mac the same way it does at home.
 
-1. **On the server Mac**, install Tailscale from <https://tailscale.com/download/mac> and sign in.
-2. **On the iPhone**, install Tailscale from the App Store and sign in with the **same account**.
-3. Check that both appear in the Tailscale app as connected. The Mac's address starts with `100.`.
-4. **Connect once at home over Wi‑Fi** with Tailscale on. The Mac sends the phone its Tailscale address automatically. You'll see it under **Settings → Away from home → Found automatically** in the phone app.
-5. Away from home, turn on Tailscale on the phone and open Musiplex. It tries every address it knows at once and uses the first that answers.
+**Why it wasn't working before:** Tailscale on the Mac was set to *not* start at login, and it was switched off. When Tailscale on the Mac is off, the phone has nothing to connect to. Musiplex now watches for this and turns Tailscale back on by itself (**Settings → Turn Tailscale back on if it switches off**).
 
-**If it still says Offline away from home:**
+### Start fresh
 
-- **The Mac is asleep.** This is the usual cause. See "Keep the server awake" above. If the Mac app shows its Tailscale address in the sidebar, Tailscale is fine on that side.
-- **Tailscale is off on the phone.** Turn the VPN toggle on in the Tailscale app. iOS sometimes turns it off.
-- **Test the connection.** On the phone, with Tailscale on, open Safari and go to `http://100.x.y.z:7860/ping`, using your Mac's Tailscale IP. It should say `musiplex`. If it doesn't load, the problem is Tailscale or the Mac, not Musiplex.
-- **The macOS firewall is blocking Musiplex.** In **System Settings → Network → Firewall → Options**, make sure Musiplex is set to **Allow incoming connections**.
-- **Type the address yourself.** If needed, enter the address under **Settings → Away from home** on the phone, either `100.x.y.z` or the MagicDNS name like `my-mac.tailnet-name.ts.net`.
+Follow these in order.
+
+**A. Remove the old setup** (optional, if you want a clean start)
+
+1. On the Mac, quit Tailscale (menu bar icon → Quit) and drag **Tailscale** from Applications to the Bin.
+2. On the iPhone, press and hold the Tailscale app → **Remove App**. Then open **Settings → General → VPN & Device Management → VPN**, and delete any Tailscale entry.
+3. Optional: at <https://login.tailscale.com/admin/machines>, delete the old machines. Or simply make a new account below.
+
+**B. Make the account and set up the Mac**
+
+4. On the **Mac**, download Tailscale from <https://tailscale.com/download/mac> and open it.
+5. Click **Log in**. In the browser, choose how to sign in (Google, Apple, GitHub or Microsoft); a new Tailscale account is created on the spot. Remember which one you picked.
+6. If macOS asks to **allow the VPN configuration** or a **system extension**, click **Allow**. You may need to open System Settings → Privacy & Security and click Allow there.
+7. Click the Tailscale icon in the menu bar and turn on **Launch at login** (in Settings / Preferences). Make sure it says **Connected**.
+8. Open **Musiplex** on the Mac and go to **Settings** (in the sidebar). "Listen From Anywhere" should show a green dot and an address starting with **100.**
+
+**C. Set up the iPhone (and iPad)**
+
+9. Install **Tailscale** from the App Store and open it.
+10. Tap **Log in** and sign in with the **same** Google / Apple / GitHub / Microsoft account as on the Mac.
+11. When iOS asks to **Add VPN Configurations**, tap **Allow** and confirm with Face ID or your passcode.
+12. Make sure the switch at the top says **Connected**. Your Mac should appear in the list of devices.
+
+**D. Connect Musiplex once at home**
+
+13. At home on Wi‑Fi, with Tailscale on, open Musiplex on the phone. If it asks, type the PIN from the Mac's Settings page.
+14. On the phone, open the status button (top right) → **Away from home**. It should show **Found automatically: 100.x.y.z**. That's the Mac's Tailscale address, saved for when you're out.
+
+**E. Test it away from home**
+
+15. Turn **Wi‑Fi off** on the phone, so you're on mobile data, and check Tailscale still says Connected.
+16. Open Safari and go to `http://100.x.y.z:7860/ping`, using your Mac's address. It should show **musiplex**.
+17. Open Musiplex. It should connect within a few seconds.
+
+**If step 16 fails, the problem is the Mac:**
+
+- **The Mac is asleep.** Musiplex keeps it awake while it's open (Settings → Keep this Mac awake), but closing the lid of a MacBook still sleeps it. Either keep it plugged in and open, or run this once in Terminal (undo it later with `0` instead of `1`):
+
+  ```bash
+  sudo pmset -a disablesleep 1
+  ```
+
+- **Tailscale is off on the Mac.** Musiplex → Settings shows an orange dot. Click **Turn On Tailscale**.
+- **The firewall is blocking Musiplex.** In **System Settings → Network → Firewall → Options**, set Musiplex to *Allow incoming connections*.
+
+**If step 16 works but Musiplex doesn't connect:** type the address yourself under **Away from home** in the phone app, then tap **Connect**.
+
+### Another option: ZeroTier
+
+[ZeroTier](https://www.zerotier.com) is a free alternative that works the same way: install it on the Mac and the phone, and join both to the same network. Then type the Mac's ZeroTier address into **Away from home** on the phone. Musiplex doesn't need anything else.
 
 ---
+
+## Playlist versions & Apple Music
+
+- **Versions:** every playlist change gets a version number (1.1, 1.2, 1.3, …) with the date and the device it came from: this Mac, your iPhone, your iPad, or "Apple Music on your iPhone".
+  - To see them, open **Settings** on the Mac, or the **History** tab on the iPhone and iPad.
+  - Tap or click a version to see exactly which songs were added to or removed from which playlist.
+- **Apple Music sync (iPhone):** turn it on in the phone app under **Settings → Apple Music**. It's on by default on iPhone and off on iPad.
+  - Playlists you make or change in Apple Music on the phone appear in Musiplex.
+  - Songs you add to a Musiplex playlist are added to the matching Apple Music playlist.
+  - Apple doesn't let apps remove songs from Apple Music playlists. So removing a song in Apple Music removes it from Musiplex, but not the other way round.
+  - Songs are matched by title and artist, so only songs that exist on both sides can be synced.
+
+## Connection: Bluetooth backup
+
+The phone keeps a Bluetooth link to the Mac open alongside Wi‑Fi (**Settings → Connection**). Play, pause and skip go over both links, and the Mac runs each command only once. If Wi‑Fi drops, control switches to Bluetooth straight away.
+
+You can't merge Bluetooth and Wi‑Fi into one faster connection: Bluetooth adds only about 2 Mbit/s next to Wi‑Fi's hundreds. So Bluetooth is used for reliability, not speed.
 
 ## Speed notes
 
@@ -82,6 +140,12 @@ Tailscale puts your Mac and phone on a private network that works anywhere. Musi
   - If you leave the app, downloads carry on in the background but slower. iOS throttles background transfers, so leave Musiplex open for a big sync.
 - **Controls:** play, pause and skip are sent immediately. When the phone is the speaker, it pauses on its own without waiting for the Mac.
 - **Bluetooth headphones:** headphones on the Mac add about 0.2–0.3 s of delay of their own.
+
+## Notch
+
+- **Layout:** tabs sit either side of the camera, with the battery on the right.
+- **Power:** click the battery to see watts coming into the Mac, watts the Mac is using, power flowing into or out of the battery, and each USB‑C port's power contract.
+- **Paused:** the notch shrinks back to normal size. Hover over it to open it.
 
 ## Project layout
 

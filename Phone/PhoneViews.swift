@@ -18,8 +18,14 @@ struct MusiplexPhoneApp: App {
 }
 
 enum PhoneTab: String, CaseIterable, Identifiable {
-    case songs = "Songs", albums = "Albums", playlists = "Playlists", downloaded = "Downloaded"
+    case songs = "Songs", albums = "Albums", playlists = "Playlists", downloaded = "Downloaded", history = "History"
     var id: String { rawValue }
+
+    /// Short enough for five tabs on an iPhone; the iPad has room for the full word.
+    var label: String {
+        if self == .downloaded, UIDevice.current.userInterfaceIdiom == .phone { return "Offline" }
+        return rawValue
+    }
 }
 
 enum PhoneRoute: Hashable {
@@ -58,12 +64,12 @@ struct PhoneRoot: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     header
                     Picker("", selection: $tab) {
-                        ForEach(PhoneTab.allCases) { Text($0.rawValue).tag($0) }
+                        ForEach(PhoneTab.allCases) { Text($0.label).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .padding(.horizontal, 16).padding(.bottom, 12)
 
-                    if tab != .playlists {
+                    if tab != .playlists, tab != .history {
                         HStack(spacing: 8) {
                             Image(systemName: "magnifyingglass").foregroundStyle(Theme.dim)
                             TextField("Search", text: $search).autocorrectionDisabled()
@@ -73,7 +79,7 @@ struct PhoneRoot: View {
                         .padding(.horizontal, 16).padding(.bottom, 10)
                     }
 
-                    if tab != .downloaded { DownloadAllBanner() }
+                    if tab != .downloaded, tab != .history { DownloadAllBanner() }
 
                     content
                 }
@@ -211,6 +217,8 @@ struct PhoneRoot: View {
             }
             if tracks.isEmpty { EmptyState(tab: tab) }
             TrackRows(tracks: tracks)
+        case .history:
+            HistoryList()
         }
     }
 
@@ -243,6 +251,96 @@ struct PhoneRoot: View {
         case .searching: "Searching…"
         case .needsPIN: "Enter PIN"
         case .offline: "Offline"
+        }
+    }
+}
+
+/// Playlist versions (1.1, 1.2, …) from the Mac. Tap one to see which songs
+/// changed in which playlist, and on which device.
+struct HistoryList: View {
+    @Environment(PhoneModel.self) private var model
+    @State private var open: Set<Int> = []
+
+    var body: some View {
+        if model.history.isEmpty {
+            VStack(spacing: 10) {
+                Image(systemName: "clock.arrow.circlepath").font(.system(size: 40)).foregroundStyle(Theme.gradient)
+                Text("No playlist changes yet").font(.headline)
+                Text("Every change to your playlists — on your Mac, iPhone, iPad or in Apple Music — is saved here as a new version.")
+                    .font(.subheadline).foregroundStyle(Theme.dim).multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 32).padding(.vertical, 60)
+        }
+        ForEach(model.history) { version in
+            let isOpen = open.contains(version.number)
+            VStack(alignment: .leading, spacing: 10) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        if isOpen { open.remove(version.number) } else { open.insert(version.number) }
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        Text(version.label)
+                            .font(.subheadline.weight(.bold)).monospacedDigit()
+                            .padding(.horizontal, 9).padding(.vertical, 4)
+                            .background(Theme.accent.opacity(0.2), in: Capsule())
+                            .foregroundStyle(Theme.accent)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(version.summary).font(.subheadline.weight(.semibold)).lineLimit(2)
+                            Text("\(version.source) · \(version.date.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption).foregroundStyle(Theme.dim).lineLimit(1)
+                        }
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.right").font(.caption.weight(.bold))
+                            .rotationEffect(.degrees(isOpen ? 90 : 0)).foregroundStyle(Theme.dim)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if isOpen {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(Array(version.changes.enumerated()), id: \.offset) { _, change in
+                            VersionChangeView(change: change)
+                        }
+                    }
+                    .padding(.leading, 8)
+                }
+            }
+            .padding(14)
+            .background(Theme.raised, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(.horizontal, 16).padding(.bottom, 8)
+        }
+    }
+}
+
+struct VersionChangeView: View {
+    let change: PlaylistChange
+
+    var body: some View {
+        let minus = change.kind == .removed || change.kind == .deleted
+        let color: Color = minus ? .red : change.kind == .renamed ? .orange : .green
+        VStack(alignment: .leading, spacing: 4) {
+            Text(headline).font(.subheadline.weight(.semibold)).foregroundStyle(color)
+            ForEach(Array(change.songs.prefix(50).enumerated()), id: \.offset) { _, song in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(minus ? "−" : "+").font(.caption.weight(.bold).monospaced()).foregroundStyle(color)
+                    Text(song).font(.caption).lineLimit(1)
+                }
+            }
+            if change.songs.count > 50 {
+                Text("and \(change.songs.count - 50) more").font(.caption).foregroundStyle(Theme.dim)
+            }
+        }
+    }
+
+    private var headline: String {
+        switch change.kind {
+        case .created: "Created “\(change.playlist)”"
+        case .renamed: "Renamed “\(change.detail ?? "")” → “\(change.playlist)”"
+        case .deleted: "Deleted “\(change.playlist)”"
+        case .added: "Added \(change.songs.count) to “\(change.playlist)”"
+        case .removed: "Removed \(change.songs.count) from “\(change.playlist)”"
         }
     }
 }
@@ -353,11 +451,13 @@ struct DownloadAllBanner: View {
 struct TrackRows: View {
     @Environment(PhoneModel.self) private var model
     let tracks: [Track]
+    /// Set when showing one of your playlists, so songs can be removed from it.
+    var playlistID: String? = nil
 
     var body: some View {
         let state = model.session.state
         ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
-            PhoneRow(track: track, current: state.currentID == track.id, playing: state.isPlaying)
+            PhoneRow(track: track, current: state.currentID == track.id, playing: state.isPlaying, playlistID: playlistID)
                 .contentShape(Rectangle())
                 .onTapGesture { model.play(tracks, at: index) }
         }
@@ -412,9 +512,14 @@ struct CollectionScreen: View {
     let kind: String
     @State private var tint = Color.clear
     @State private var sentToMusic = false
+    @State private var renaming = false
+    @State private var newName = ""
+    @State private var confirmDelete = false
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         let tracks = model.tracks(list)
+        let editable = kind == "Playlist" && model.isEditable(list)
         let missing = model.missing(in: tracks)
         let busy = tracks.contains { model.downloads.isBusy($0.id) }
         ScrollView {
@@ -482,7 +587,7 @@ struct CollectionScreen: View {
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 24).padding(.top, 8).padding(.bottom, 18)
 
-                TrackRows(tracks: tracks)
+                TrackRows(tracks: tracks, playlistID: editable ? list.id : nil)
             }
             .padding(.bottom, 100)
         }
@@ -490,6 +595,29 @@ struct CollectionScreen: View {
             LinearGradient(colors: [tint.opacity(0.55), Theme.bg], startPoint: .top, endPoint: .center).ignoresSafeArea()
         )
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if editable, model.isLinked {
+                Menu {
+                    Button("Rename", systemImage: "pencil") { newName = list.name; renaming = true }
+                    Button("Delete Playlist", systemImage: "trash", role: .destructive) { confirmDelete = true }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+        }
+        .alert("Rename Playlist", isPresented: $renaming) {
+            TextField("Name", text: $newName)
+            Button("Save") { model.renamePlaylist(list.id, to: newName) }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Delete “\(list.name)”?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete Playlist", role: .destructive) {
+                model.deletePlaylist(list.id)
+                dismiss()
+            }
+        } message: {
+            Text("The songs stay in your library. This is saved as a new version you can see in History.")
+        }
         .task(id: list.id) {
             let color = await ArtCache.shared.tint(list.trackIDs.first)
             withAnimation(.easeInOut(duration: 0.6)) { tint = color }
@@ -502,6 +630,7 @@ struct PhoneRow: View {
     let track: Track
     let current: Bool
     let playing: Bool
+    var playlistID: String? = nil
 
     var body: some View {
         let downloaded = model.isDownloaded(track.id)
@@ -553,6 +682,11 @@ struct PhoneRow: View {
                 Button("Play Next", systemImage: "text.insert") { model.send(Command(action: "playNext", ids: [track.id])) }
                 Button("Add to Queue", systemImage: "text.append") { model.send(Command(action: "enqueue", ids: [track.id])) }
                 PhoneAddToPlaylistMenu(ids: [track.id])
+                if let playlistID {
+                    Button("Remove from Playlist", systemImage: "minus.circle", role: .destructive) {
+                        model.removeFromPlaylist([track.id], playlistID: playlistID)
+                    }
+                }
             }
         }
     }
@@ -752,6 +886,39 @@ struct LinkSheet: View {
                     } footer: {
                         Text("The PIN is shown in the bottom‑left corner of Musiplex on your Mac. You only need it once.")
                     }
+                }
+                Section {
+                    Toggle("Sync with Apple Music", isOn: Binding(get: { model.appleMusic.enabled },
+                                                                  set: { model.appleMusic.enabled = $0 }))
+                    if model.appleMusic.enabled {
+                        if model.appleMusic.denied {
+                            Button("Allow access in Settings") {
+                                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                            }
+                        } else if let last = model.appleMusic.lastSync {
+                            LabeledContent("Last synced", value: last.formatted(date: .omitted, time: .shortened))
+                            LabeledContent("Linked playlists", value: "\(model.appleMusic.linkedCount)")
+                            if model.appleMusic.notInAppleMusic > 0 {
+                                Text("\(model.appleMusic.notInAppleMusic) song\(model.appleMusic.notInAppleMusic == 1 ? " isn't" : "s aren't") in Apple Music on this \(model.deviceWord), so they're only in Musiplex.")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
+                        Button("Sync Now") { model.appleMusic.schedule() }.disabled(!model.isLinked)
+                    }
+                } header: {
+                    Text("Apple Music")
+                } footer: {
+                    Text("Playlists you make or change in Apple Music on this \(model.deviceWord) show up in Musiplex, and songs you add to a Musiplex playlist are added in Apple Music too. Apple doesn't let apps remove songs from Apple Music playlists, so removals only go one way (Apple Music → Musiplex).")
+                }
+                Section {
+                    Toggle("Bluetooth backup link", isOn: $model.bluetoothBackup)
+                    if model.bluetoothBackup, model.link == .wifi {
+                        LabeledContent("Standby", value: model.hasBackup ? "Connected" : "Looking for your Mac…")
+                    }
+                } header: {
+                    Text("Connection")
+                } footer: {
+                    Text("Keeps a Bluetooth link to your Mac open next to Wi‑Fi. Play, pause and skip are sent over both, and if Wi‑Fi drops, control switches over instantly. Uses a little more battery.")
                 }
                 Section {
                     TextField("100.x.y.z or mac-name.tailnet.ts.net", text: $model.remoteHost)

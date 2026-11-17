@@ -69,6 +69,7 @@ struct Sidebar: View {
             nav("Songs", "music.note", .songs)
             nav("Albums", "square.stack.fill", .albums)
             nav("Artists", "music.mic", .artists)
+            nav("Settings", "gearshape.fill", .settings)
 
             Text("LIBRARY").font(.caption2.weight(.semibold)).foregroundStyle(Theme.dim)
                 .padding(.top, 22).padding(.horizontal, 10).padding(.bottom, 4)
@@ -202,7 +203,7 @@ struct DevicesCard: View {
                 Text(error).font(.caption2).foregroundStyle(Theme.dim)
             } else {
                 row("Wi‑Fi", server.address)
-                if let tailscale = server.tailscale { row("Tailscale", tailscale) }
+                tailscaleRow
                 row("Pairing PIN", server.pin)
             }
             ForEach(server.phones) { phone in
@@ -236,6 +237,27 @@ struct DevicesCard: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.raised, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    @ViewBuilder private var tailscaleRow: some View {
+        let remote = model.remote
+        Button { model.search = ""; model.route = .settings } label: {
+            HStack {
+                Text("Tailscale").foregroundStyle(Theme.dim)
+                Spacer()
+                if let ip = remote.tailscaleIP {
+                    Text(ip).monospacedDigit()
+                } else {
+                    Label(remote.status == .turningOn ? "Turning on…" : remote.status == .notInstalled ? "Not installed" : "Off",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
+            }
+            .font(.caption)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Remote access settings")
     }
 
     private func row(_ label: String, _ value: String) -> some View {
@@ -347,6 +369,8 @@ struct MainView: View {
                     CollectionView(kind: "Artist", title: artist.name, subtitle: nil,
                                    artID: artist.artID, tracks: artist.tracks, round: true)
                 }
+            case .settings:
+                SettingsView()
             case .playlist(let id):
                 if let list = library.playlists.first(where: { $0.id == id }) {
                     CollectionView(playlist: list, kind: "Playlist", title: list.name, subtitle: nil,

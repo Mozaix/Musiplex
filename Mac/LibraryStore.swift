@@ -53,6 +53,9 @@ final class LibraryStore {
     /// Track ID → the Music app's persistent ID, for sending playlists to Apple Music.
     @ObservationIgnored private(set) var musicIDs: [String: String] = [:]
     @ObservationIgnored private let userPlaylistsURL: URL
+    /// Every playlist edit, newest first (1.1, 1.2, …).
+    private(set) var history: [PlaylistVersion] = []
+    @ObservationIgnored private let historyURL: URL
     @ObservationIgnored var onChange: (() -> Void)?
 
     let artDir: URL
@@ -79,6 +82,12 @@ final class LibraryStore {
         artDir = support.appendingPathComponent("art")
         indexURL = support.appendingPathComponent("library-v2.json")
         userPlaylistsURL = support.appendingPathComponent("playlists.json")
+        historyURL = support.appendingPathComponent("history.json")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        if let data = try? Data(contentsOf: historyURL), let saved = try? decoder.decode([PlaylistVersion].self, from: data) {
+            history = saved
+        }
         if let data = try? Data(contentsOf: userPlaylistsURL),
            let saved = try? JSONDecoder().decode([Playlist].self, from: data) {
             userPlaylists = saved
@@ -416,42 +425,98 @@ final class LibraryStore {
     }
 
     // MARK: Your playlists
+    // Every edit says where it came from ("This Mac", a phone's name, or
+    // "Apple Music on …") and is written to the version history.
 
     @discardableResult
-    func createPlaylist(named name: String, with ids: [String] = []) -> String {
+    func createPlaylist(named name: String, with ids: [String] = [], id given: String? = nil,
+                        source: String = "This Mac") -> String {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let id = "my-" + UUID().uuidString
-        userPlaylists.append(Playlist(id: id, name: clean.isEmpty ? "New Playlist" : clean, trackIDs: []))
-        if ids.isEmpty { saveUserPlaylists() } else { add(ids, toPlaylist: id) }
+        let id = given ?? "my-" + UUID().uuidString
+        if userPlaylists.contains(where: { $0.id == id }) {
+            add(ids, toPlaylist: id, source: source)
+            return id
+        }
+        let finalName = clean.isEmpty ? "New Playlist" : clean
+        userPlaylists.append(Playlist(id: id, name: finalName, trackIDs: []))
+        record([PlaylistChange(playlist: finalName, kind: .created)], source: source)
+        if ids.isEmpty { saveUserPlaylists() } else { add(ids, toPlaylist: id, source: source) }
         return id
     }
 
     /// Adds songs to the end of one of your playlists, skipping ones already in it.
-    func add(_ ids: [String], toPlaylist id: String) {
+    func add(_ ids: [String], toPlaylist id: String, source: String = "This Mac") {
         guard let i = userPlaylists.firstIndex(where: { $0.id == id }) else { return }
-        var existing = Set(userPlaylists[i].trackIDs)
+        var existing = Set(userPlaylists[i].trackIDs.map { hidden[$0] ?? $0 })
+        var added: [String] = []
         for id in ids.map({ hidden[$0] ?? $0 }) where existing.insert(id).inserted {
             userPlaylists[i].trackIDs.append(id)
+            added.append(id)
         }
+        guard !added.isEmpty else { return }
+        record([PlaylistChange(playlist: userPlaylists[i].name, kind: .added, songs: added.map(label))], source: source)
         saveUserPlaylists()
     }
 
-    func remove(_ trackID: String, fromPlaylist id: String) {
+    func remove(_ trackID: String, fromPlaylist id: String, source: String = "This Mac") {
+        remove([trackID], fromPlaylist: id, source: source)
+    }
+
+    func remove(_ trackIDs: [String], fromPlaylist id: String, source: String = "This Mac") {
         guard let i = userPlaylists.firstIndex(where: { $0.id == id }) else { return }
-        userPlaylists[i].trackIDs.removeAll { $0 == trackID || hidden[$0] == trackID }
+        let gone = Set(trackIDs.map { hidden[$0] ?? $0 })
+        let removed = userPlaylists[i].trackIDs.filter { gone.contains(hidden[$0] ?? $0) }
+        guard !removed.isEmpty else { return }
+        userPlaylists[i].trackIDs.removeAll { gone.contains(hidden[$0] ?? $0) }
+        record([PlaylistChange(playlist: userPlaylists[i].name, kind: .removed, songs: removed.map(label))], source: source)
         saveUserPlaylists()
     }
 
-    func renamePlaylist(_ id: String, to name: String) {
+    func renamePlaylist(_ id: String, to name: String, source: String = "This Mac") {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty, let i = userPlaylists.firstIndex(where: { $0.id == id }) else { return }
+        guard !clean.isEmpty, let i = userPlaylists.firstIndex(where: { $0.id == id }),
+              userPlaylists[i].name != clean else { return }
+        let old = userPlaylists[i].name
         userPlaylists[i].name = clean
+        record([PlaylistChange(playlist: clean, kind: .renamed, detail: old)], source: source)
         saveUserPlaylists()
     }
 
-    func deletePlaylist(_ id: String) {
+    func deletePlaylist(_ id: String, source: String = "This Mac") {
+        guard let list = userPlaylists.first(where: { $0.id == id }) else { return }
         userPlaylists.removeAll { $0.id == id }
+        record([PlaylistChange(playlist: list.name, kind: .deleted, songs: list.trackIDs.map(label))], source: source)
         saveUserPlaylists()
+    }
+
+    private func label(_ id: String) -> String {
+        guard let t = byID[hidden[id] ?? id] ?? entries.first(where: { $0.track.id == id })?.track else { return "Unknown song" }
+        return "\(t.title) — \(t.artist)"
+    }
+
+    /// Adds changes to the history. Quick edits from the same device (within
+    /// two minutes) fold into one version instead of one version per song.
+    private func record(_ changes: [PlaylistChange], source: String) {
+        guard !changes.isEmpty else { return }
+        if var last = history.first, last.source == source, Date().timeIntervalSince(last.date) < 120 {
+            for change in changes {
+                if change.kind == .added || change.kind == .removed,
+                   let j = last.changes.firstIndex(where: { $0.playlist == change.playlist && $0.kind == change.kind }) {
+                    last.changes[j].songs += change.songs
+                } else {
+                    last.changes.append(change)
+                }
+            }
+            last.date = Date()
+            history[0] = last
+        } else {
+            let next = (history.first?.number ?? 0) + 1
+            history.insert(PlaylistVersion(number: next, date: Date(), source: source, changes: changes), at: 0)
+            if history.count > 500 { history.removeLast(history.count - 500) }
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(history) { try? data.write(to: historyURL, options: .atomic) }
     }
 
     private func saveUserPlaylists() {
@@ -463,6 +528,7 @@ final class LibraryStore {
     var catalog: Catalog {
         Catalog(tracks: tracks,
                 albums: albums.map { Playlist(id: $0.id, name: $0.title, subtitle: $0.artist, trackIDs: $0.tracks.map(\.id)) },
-                playlists: playlists.map { Playlist(id: $0.id, name: $0.name, subtitle: nil, trackIDs: $0.tracks.map(\.id)) })
+                playlists: playlists.map { Playlist(id: $0.id, name: $0.name, subtitle: $0.editable ? "mine" : nil, trackIDs: $0.tracks.map(\.id)) },
+                history: Array(history.prefix(200)))
     }
 }

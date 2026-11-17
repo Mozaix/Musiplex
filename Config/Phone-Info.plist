@@ -13,6 +13,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Musiplex keeps your Apple Music playlists and your Musiplex playlists in sync.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Musiplex connects to your Mac over Bluetooth when there is no Wi‑Fi.</string>
 	<key>NSBonjourServices</key>

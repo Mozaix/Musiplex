@@ -24,6 +24,46 @@ struct Catalog: Codable {
     var tracks: [Track]
     var albums: [Playlist]
     var playlists: [Playlist]
+    /// Playlist change history, newest first.
+    var history: [PlaylistVersion]? = nil
+}
+
+/// One change to one playlist inside a version.
+struct PlaylistChange: Codable, Hashable {
+    enum Kind: String, Codable { case created, renamed, deleted, added, removed }
+    var playlist: String
+    var kind: Kind
+    /// "Title — Artist" for added/removed songs.
+    var songs: [String] = []
+    /// Old name for a rename.
+    var detail: String? = nil
+}
+
+/// A numbered snapshot of playlist edits (1.1, 1.2, …): when, from which
+/// device, and exactly which songs changed in which playlist.
+struct PlaylistVersion: Codable, Identifiable, Hashable {
+    var number: Int
+    var date: Date
+    /// Where the edit came from: "This Mac", "Hosam's iPhone", "Apple Music on Hosam's iPhone".
+    var source: String
+    var changes: [PlaylistChange]
+
+    var id: Int { number }
+    var label: String { "1.\(number)" }
+
+    var summary: String {
+        let added = changes.filter { $0.kind == .added }.reduce(0) { $0 + $1.songs.count }
+        let removed = changes.filter { $0.kind == .removed }.reduce(0) { $0 + $1.songs.count }
+        var parts: [String] = []
+        if added > 0 { parts.append("+\(added) song\(added == 1 ? "" : "s")") }
+        if removed > 0 { parts.append("−\(removed) song\(removed == 1 ? "" : "s")") }
+        for c in changes where c.kind == .created { parts.append("new “\(c.playlist)”") }
+        for c in changes where c.kind == .renamed { parts.append("renamed “\(c.playlist)”") }
+        for c in changes where c.kind == .deleted { parts.append("deleted “\(c.playlist)”") }
+        let lists = Set(changes.map(\.playlist))
+        if (added > 0 || removed > 0), lists.count == 1, let name = lists.first { parts.append("in “\(name)”") }
+        return parts.isEmpty ? "No changes" : parts.joined(separator: " · ")
+    }
 }
 
 struct DeviceInfo: Codable, Identifiable, Hashable {
@@ -91,6 +131,12 @@ struct Message: Codable {
     var text: String? = nil
     /// Other addresses the Mac can be reached at (Tailscale IP / MagicDNS name).
     var hosts: [String]? = nil
+    /// Songs to take out of a playlist (playlist edits).
+    var removeIDs: [String]? = nil
+    /// Command sequence number, so a command sent over two links runs once.
+    var seq: Int? = nil
+    /// Who made a playlist edit, when it isn't the device itself ("Apple Music on …").
+    var source: String? = nil
 }
 
 enum Net {
@@ -113,6 +159,16 @@ func timeString(_ seconds: Double) -> String {
 
 /// Songs that are the same recording (same title and artist, length within
 /// 3 s), mapped to the best-quality copy that should be kept.
+/// Loose "same song" key: title + artist with case, accents, spaces and punctuation ignored.
+func songKey(title: String, artist: String) -> String {
+    func norm(_ s: String) -> String {
+        s.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+            .unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }
+            .map(String.init).joined()
+    }
+    return "\(norm(title))|\(norm(artist))"
+}
+
 func findDuplicates(in tracks: [Track]) -> [String: String] {
     func norm(_ s: String) -> String {
         s.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)

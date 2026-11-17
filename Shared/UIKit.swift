@@ -168,7 +168,13 @@ final class NowPlayingBridge {
         let center = MPRemoteCommandCenter.shared()
         func on(_ command: MPRemoteCommand, _ action: String) {
             command.addTarget { _ in
-                Task { @MainActor in send(Command(action: action)) }
+                // Media keys arrive on the main thread: act right away rather
+                // than queueing another hop.
+                if Thread.isMainThread {
+                    MainActor.assumeIsolated { send(Command(action: action)) }
+                } else {
+                    DispatchQueue.main.async { MainActor.assumeIsolated { send(Command(action: action)) } }
+                }
                 return .success
             }
         }

@@ -18,6 +18,10 @@ struct MenuBarPlayer: View {
         }
         .frame(width: 300)
         .background(Theme.bg)
+        // Always light-on-dark, even when macOS is in light mode (otherwise
+        // un-styled text turns black on the dark background).
+        .foregroundStyle(.white)
+        .environment(\.colorScheme, .dark)
         .preferredColorScheme(.dark)
         .task(id: model.session.state.currentID) {
             let color = await ArtCache.shared.tint(model.session.state.currentID)
@@ -41,16 +45,18 @@ private struct NowPlayingCard: View {
                         .frame(width: 72, height: 72)
                         .shadow(color: .black.opacity(0.45), radius: 10, y: 5)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(track.title).font(.system(size: 15, weight: .bold)).lineLimit(1)
-                        Text(track.artist).font(.system(size: 12)).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                        Text(track.title).font(.system(size: 15, weight: .bold)).foregroundStyle(.white).lineLimit(1)
+                        Text(track.artist).font(.system(size: 12)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
                         HStack(spacing: 5) {
                             Image(systemName: state.activeDevice == "mac" ? "laptopcomputer" : "iphone")
                             Text(state.activeDevice == "mac" ? "This Mac" : model.server.name(of: state.activeDevice))
                                 .lineLimit(1)
                         }
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
                         .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(.white.opacity(0.14), in: Capsule())
+                        .background(.black.opacity(0.45), in: Capsule())
+                        .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
                         .padding(.top, 2)
                     }
                     Spacer(minLength: 0)
@@ -106,6 +112,8 @@ private struct NowPlayingCard: View {
         .background {
             ZStack {
                 LinearGradient(colors: [tint.opacity(0.85), tint.opacity(0.35)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                // Keep white text readable even on very light artwork.
+                Color.black.opacity(0.28)
                 LinearGradient(colors: [.clear, Theme.bg.opacity(0.9)], startPoint: .center, endPoint: .bottom)
             }
         }
@@ -174,7 +182,7 @@ private struct DeviceList: View {
         let active = model.session.state.activeDevice
         VStack(alignment: .leading, spacing: 6) {
             Text("PLAY ON").font(.system(size: 9, weight: .semibold, design: .monospaced)).kerning(1.5)
-                .foregroundStyle(Theme.dim)
+                .foregroundStyle(.white.opacity(0.6))
             ForEach(model.server.devices) { device in
                 let on = device.id == active
                 Button { model.send("device", text: device.id) } label: {
@@ -185,7 +193,8 @@ private struct DeviceList: View {
                             .background(on ? AnyShapeStyle(Theme.gradient) : AnyShapeStyle(Color.white.opacity(0.08)), in: Circle())
                             .foregroundStyle(on ? .black : .white)
                         Text(device.id == "mac" ? "This Mac" : device.name)
-                            .font(.system(size: 12, weight: on ? .semibold : .regular))
+                            .font(.system(size: 12, weight: on ? .semibold : .medium))
+                            .foregroundStyle(on ? .white : .white.opacity(0.85))
                             .lineLimit(1)
                         Spacer()
                         if on {
@@ -194,7 +203,7 @@ private struct DeviceList: View {
                         }
                     }
                     .padding(6)
-                    .background(on ? Color.white.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .background(on ? Color.white.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

@@ -36,6 +36,19 @@ final class PhoneModel {
     let session: SessionController
     let downloads = DownloadStore()
     let upcoming = UpcomingCache()
+    let appleMusic: AppleMusicSync
+    /// Playlist change history from the Mac, newest first.
+    private(set) var history: [PlaylistVersion] = []
+    /// Keep a Bluetooth link to the Mac open next to Wi‑Fi: commands go over
+    /// both, and if Wi‑Fi drops, playback control carries on instantly.
+    var bluetoothBackup = UserDefaults.standard.object(forKey: "bluetoothBackup") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(bluetoothBackup, forKey: "bluetoothBackup")
+            if bluetoothBackup { if link == .wifi { nearby.connect() } } else if !viaNearby { nearby.disconnect(); hasBackup = false }
+        }
+    }
+    /// The Bluetooth standby link is up.
+    private(set) var hasBackup = false
 
     var isLinked: Bool { link == .wifi || link == .nearby }
 
@@ -55,6 +68,7 @@ final class PhoneModel {
     @ObservationIgnored private let watch = WatchBridge()
     @ObservationIgnored private let nearby: NearbyClient
     @ObservationIgnored private var viaNearby = false
+    @ObservationIgnored private var commandSeq = Int.random(in: 1...1_000_000)
     @ObservationIgnored private var active = true
     @ObservationIgnored private var probing = false
     @ObservationIgnored private var retrying = false
@@ -77,6 +91,7 @@ final class PhoneModel {
             defaults.set(deviceID, forKey: "deviceID")
         }
         session = SessionController(device: deviceID)
+        appleMusic = AppleMusicSync(defaultOn: UIDevice.current.userInterfaceIdiom == .phone)
         nearby = NearbyClient(name: UIDevice.current.name)
 
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -106,6 +121,12 @@ final class PhoneModel {
             try? data.write(to: file)
             return image
         }
+
+        appleMusic.source = { [unowned self] in
+            guard link == .wifi || link == .nearby, !rawCatalog.tracks.isEmpty else { return nil }
+            return (rawCatalog.tracks, rawCatalog.playlists, UIDevice.current.name)
+        }
+        appleMusic.send = { [unowned self] in transmit($0) }
 
         setUpNearby()
         startBrowsing()
@@ -174,7 +195,10 @@ final class PhoneModel {
 
     func setActive(_ on: Bool) {
         active = on
-        if on { reconnect() }
+        if on {
+            reconnect()
+            appleMusic.schedule()
+        }
     }
 
     /// Probe every known address (home Wi‑Fi first, then the remote/Tailscale
@@ -302,13 +326,24 @@ final class PhoneModel {
 
     private func setUpNearby() {
         nearby.onFound = { [weak self] in
-            guard let self, !self.isLinked, self.socket == nil, !self.probing else { return }
+            guard let self else { return }
+            if self.link == .wifi {
+                if self.bluetoothBackup { self.nearby.connect() }   // standby next to Wi‑Fi
+                return
+            }
+            guard !self.isLinked, self.socket == nil, !self.probing else { return }
             self.nearby.connect()
         }
         nearby.onConnect = { [weak self] in
             guard let self else { return }
             guard self.link != .wifi, self.socket == nil else {
-                self.nearby.disconnect()
+                // Already on Wi‑Fi: keep this as a standby link (or drop it).
+                if self.bluetoothBackup, self.link == .wifi {
+                    self.sendNearby(Message(type: "hello", token: self.token, name: UIDevice.current.name,
+                                            deviceID: self.deviceID, kind: self.kind, text: "backup"))
+                } else {
+                    self.nearby.disconnect()
+                }
                 return
             }
             self.viaNearby = true
@@ -316,13 +351,21 @@ final class PhoneModel {
             self.hello(pin: nil)
         }
         nearby.onDisconnect = { [weak self] in
-            guard let self, self.viaNearby else { return }
+            guard let self else { return }
+            self.hasBackup = false
+            guard self.viaNearby else { return }
             self.viaNearby = false
             self.abandonNearbyDownloads()
             if self.link != .wifi { self.dropped() }
         }
         nearby.onData = { [weak self] data in
-            guard let self, self.viaNearby, let message = try? JSONDecoder().decode(Message.self, from: data) else { return }
+            guard let self, let message = try? JSONDecoder().decode(Message.self, from: data) else { return }
+            if !self.viaNearby {
+                // Standby link chatter only.
+                if message.type == "backupReady" { self.hasBackup = true }
+                if message.type == "promoted" { self.promoteBackup(state: message.state, devices: message.devices) }
+                return
+            }
             self.handle(message)
         }
         nearby.onProgress = { [weak self] name, value in
@@ -385,12 +428,40 @@ final class PhoneModel {
     }
 
     private func transmit(_ message: Message) {
+        var message = message
+        if message.type == "command" {
+            commandSeq += 1
+            message.seq = commandSeq
+        }
         guard let data = try? JSONEncoder().encode(message) else { return }
         if viaNearby {
             nearby.send(data)
         } else {
             socket?.send(.string(String(decoding: data, as: UTF8.self))) { _ in }
+            // Belt and braces: commands also go over the Bluetooth standby link
+            // (the Mac runs each one once), so a Wi‑Fi hiccup doesn't eat a tap.
+            if message.type == "command", hasBackup { nearby.send(data) }
         }
+    }
+
+    private func sendNearby(_ message: Message) {
+        if let data = try? JSONEncoder().encode(message) { nearby.send(data) }
+    }
+
+    /// Wi‑Fi dropped but the Bluetooth standby is up: switch to it without a gap.
+    private func promoteBackup(state: SessionState?, devices: [DeviceInfo]?) {
+        guard !viaNearby, nearby.isConnected else { return }
+        socket?.cancel()
+        socket = nil
+        viaNearby = true
+        hasBackup = false
+        link = .nearby
+        if let devices { self.devices = devices }
+        if let state { session.follow(state) }
+        // Make it the main link on the Mac too.
+        hello(pin: nil)
+        publish()
+        retryLater()
     }
 
     private func handle(_ m: Message) {
@@ -409,7 +480,18 @@ final class PhoneModel {
             ArtCache.shared.resetMisses()
             if let state = m.state { session.follow(state) }
             fetchCatalog()
-            if viaNearby { retryLater() } else { nearby.disconnect() }
+            if viaNearby {
+                retryLater()
+            } else if bluetoothBackup {
+                if nearby.isConnected {
+                    sendNearby(Message(type: "hello", token: token, name: UIDevice.current.name,
+                                       deviceID: deviceID, kind: kind, text: "backup"))
+                } else {
+                    nearby.connect()
+                }
+            } else {
+                nearby.disconnect()
+            }
         case "denied":
             link = .needsPIN
         case "state":
@@ -441,8 +523,13 @@ final class PhoneModel {
     }
 
     private func dropped() {
+        if !viaNearby, hasBackup, nearby.isConnected {
+            promoteBackup(state: nil, devices: nil)
+            return
+        }
         socket?.cancel()
         socket = nil
+        hasBackup = false
         if viaNearby {
             nearby.disconnect()
             viaNearby = false
@@ -472,6 +559,8 @@ final class PhoneModel {
 
     private func apply(_ catalog: Catalog) {
         rawCatalog = catalog
+        history = catalog.history ?? history
+        appleMusic.schedule()
         byID = Dictionary(catalog.tracks.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         duplicates = findDuplicates(in: catalog.tracks)
         rebuildCopies()
@@ -609,7 +698,21 @@ final class PhoneModel {
     // MARK: Playlists (saved on the Mac)
 
     /// Playlists made in Musiplex, which can be added to.
-    var editablePlaylists: [Playlist] { playlists.filter { $0.id.hasPrefix("my-") } }
+    var editablePlaylists: [Playlist] { playlists.filter { $0.subtitle == "mine" || $0.id.hasPrefix("my-") } }
+
+    func isEditable(_ list: Playlist) -> Bool { list.subtitle == "mine" || list.id.hasPrefix("my-") }
+
+    func removeFromPlaylist(_ ids: [String], playlistID: String) {
+        transmit(Message(type: "playlist", text: playlistID, removeIDs: ids))
+    }
+
+    func renamePlaylist(_ playlistID: String, to name: String) {
+        transmit(Message(type: "playlist", name: name, text: playlistID))
+    }
+
+    func deletePlaylist(_ playlistID: String) {
+        transmit(Message(type: "deletePlaylist", text: playlistID))
+    }
 
     /// Song IDs waiting for a name for a new playlist.
     var newPlaylistIDs: [String]?

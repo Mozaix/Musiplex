@@ -7,6 +7,7 @@ enum Route: Hashable {
     case album(String)
     case artist(String)
     case playlist(String)
+    case settings
 }
 
 @MainActor @Observable
@@ -26,6 +27,8 @@ final class AppModel {
     let clipboard = ClipboardHistory()
     let notes = NotesStore()
     let money = Money()
+    let remote = RemoteAccess()
+    let battery = Battery()
     @ObservationIgnored private(set) var notch: NotchController!
     /// The notch overlay at the top of the screen (on by default).
     var notchEnabled = UserDefaults.standard.object(forKey: "notchEnabled") as? Bool ?? true {
@@ -63,6 +66,7 @@ final class AppModel {
             self.sendToAppleMusic(list)
         }
         server.start()
+        remote.start()
         notch = NotchController(model: self)
         if let folder = UserDefaults.standard.string(forKey: "notchSnapshot") {
             DispatchQueue.main.async { [weak self] in self?.notch.snapshot(to: folder) }

@@ -538,9 +538,11 @@ struct NotchSettingsView: View {
                 Toggle("Hide when nothing is playing", isOn: Binding(get: { settings.hideWhenIdle },
                                                                     set: { settings.hideWhenIdle = $0 }))
                     .toggleStyle(NotchSwitch()).font(.system(size: 12))
-                Text("While hidden, open it from the Musiplex icon in the menu bar.")
+                Text("Paused, the notch shrinks back to normal. Hover over it any time to open it.")
                     .font(.system(size: 10)).foregroundStyle(Theme.dim)
                     .fixedSize(horizontal: false, vertical: true)
+                Toggle("Show battery", isOn: Binding(get: { settings.showBattery }, set: { settings.showBattery = $0 }))
+                    .toggleStyle(NotchSwitch()).font(.system(size: 12))
                 Toggle("Show the notch", isOn: Binding(get: { model.notchEnabled }, set: { model.notchEnabled = $0 }))
                     .toggleStyle(NotchSwitch())
                 heading("CROSSFADE").padding(.top, 4)

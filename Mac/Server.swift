@@ -15,6 +15,10 @@ final class Server {
         var kind = "iphone"
         var deviceID = ""
         var authed = false
+        /// A second, standby link from a device already connected another way
+        /// (Bluetooth next to Wi‑Fi). Commands may arrive on both; if the main
+        /// link drops, this one takes over instantly.
+        var backup = false
         let conn: NWConnection?
         let peer: MCPeerID?
 
@@ -32,7 +36,7 @@ final class Server {
     let pin: String
     let macName = Host.current().localizedName ?? "Mac"
 
-    var phones: [Client] { clients.filter(\.authed) }
+    var phones: [Client] { clients.filter { $0.authed && !$0.backup } }
 
     /// Every device that can be picked as the speaker, this Mac first.
     var devices: [DeviceInfo] { [DeviceInfo(id: "mac", name: macName, kind: "mac")] + phones.map(\.info) }
@@ -54,6 +58,8 @@ final class Server {
     @ObservationIgnored private var listener: NWListener?
     @ObservationIgnored private var ticker: Timer?
     @ObservationIgnored private var magicDNS: String?
+    /// Recent command numbers per device, so a command sent over two links runs once.
+    @ObservationIgnored private var seenSeqs: [String: [Int]] = [:]
     @ObservationIgnored private var catalogData = Data()
     @ObservationIgnored private unowned let library: LibraryStore
     @ObservationIgnored private unowned let session: SessionController
@@ -199,13 +205,28 @@ final class Server {
                 return
             }
             let deviceID = m.deviceID ?? UUID().uuidString
+            if m.text == "backup" {
+                // Standby link: keep the main connection, just remember this one.
+                for old in clients where old.deviceID == deviceID && old.backup && old.id != id {
+                    clients.removeAll { $0.id == old.id }
+                }
+                guard let j = clients.firstIndex(where: { $0.id == id }) else { return }
+                clients[j].authed = true
+                clients[j].backup = true
+                clients[j].deviceID = deviceID
+                clients[j].name = m.name ?? "iPhone"
+                clients[j].kind = m.kind ?? "iphone"
+                send(Message(type: "backupReady"), to: clients[j])
+                return
+            }
             // A device reconnecting replaces its old connection.
-            for old in clients where old.deviceID == deviceID && old.id != id {
+            for old in clients where old.deviceID == deviceID && old.id != id && !old.backup {
                 old.conn?.cancel()
                 clients.removeAll { $0.id == old.id }
             }
             guard let j = clients.firstIndex(where: { $0.id == id }) else { return }
             clients[j].authed = true
+            clients[j].backup = false
             clients[j].name = m.name ?? "iPhone"
             clients[j].kind = m.kind ?? "iphone"
             clients[j].deviceID = deviceID
@@ -218,16 +239,32 @@ final class Server {
             devicesChanged()
         case "command":
             guard clients[i].authed, let command = m.command else { return }
+            if let seq = m.seq {
+                let key = clients[i].deviceID
+                if seenSeqs[key, default: []].contains(seq) { return }
+                seenSeqs[key, default: []].append(seq)
+                if seenSeqs[key]!.count > 64 { seenSeqs[key]!.removeFirst(32) }
+            }
             if command.action == "device", !devices.contains(where: { $0.id == command.text }) { return }
             session.perform(command)
         case "playlist":
-            // Add songs to one of your playlists (text = playlist ID) or make a new one (name).
-            guard clients[i].authed, let ids = m.ids else { return }
-            if let id = m.text {
-                library.add(ids, toPlaylist: id)
+            // Edit one of your playlists (text = playlist ID): add `ids`, remove
+            // `removeIDs`, rename to `name`. With no ID, or an ID that doesn't
+            // exist yet, it makes a new playlist.
+            guard clients[i].authed else { return }
+            let source = m.source ?? clients[i].name
+            let ids = m.ids ?? []
+            if let id = m.text, library.userPlaylists.contains(where: { $0.id == id }) {
+                if let name = m.name { library.renamePlaylist(id, to: name, source: source) }
+                if !ids.isEmpty { library.add(ids, toPlaylist: id, source: source) }
+                if let gone = m.removeIDs, !gone.isEmpty { library.remove(gone, fromPlaylist: id, source: source) }
             } else {
-                library.createPlaylist(named: m.name ?? "New Playlist", with: ids)
+                let given = m.text.flatMap { $0.hasPrefix("my-") ? $0 : nil }
+                library.createPlaylist(named: m.name ?? "New Playlist", with: ids, id: given, source: source)
             }
+        case "deletePlaylist":
+            guard clients[i].authed, let id = m.text else { return }
+            library.deletePlaylist(id, source: m.source ?? clients[i].name)
         case "exportPlaylist":
             guard clients[i].authed, let id = m.text else { return }
             onExport?(id)
@@ -271,7 +308,12 @@ final class Server {
     private func drop(_ id: UUID) {
         guard let client = clients.first(where: { $0.id == id }) else { return }
         clients.removeAll { $0.id == id }
-        if client.authed { devicesChanged() }
+        // The main link went away: its standby (Bluetooth) link takes over at once.
+        if client.authed, !client.backup, let j = clients.firstIndex(where: { $0.deviceID == client.deviceID && $0.backup }) {
+            clients[j].backup = false
+            send(Message(type: "promoted", state: session.snapshot, devices: devices), to: clients[j])
+        }
+        if client.authed, !client.backup { devicesChanged() }
         // If that device was the speaker, pause rather than suddenly blasting the Mac.
         let active = session.state.activeDevice
         if active != "mac", !phones.contains(where: { $0.deviceID == active }) {

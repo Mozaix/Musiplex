@@ -3,7 +3,7 @@ import Observation
 import SwiftUI
 
 enum NotchTab: String, CaseIterable, Identifiable {
-    case music, files, clipboard, notes, money, airdrop, settings
+    case music, files, clipboard, notes, money, airdrop, settings, power
     var id: String { rawValue }
 
     var title: String {
@@ -15,6 +15,7 @@ enum NotchTab: String, CaseIterable, Identifiable {
         case .money: "Money"
         case .airdrop: "AirDrop"
         case .settings: "Settings"
+        case .power: "Power"
         }
     }
 
@@ -27,8 +28,13 @@ enum NotchTab: String, CaseIterable, Identifiable {
         case .money: "dollarsign.circle.fill"
         case .airdrop: "dot.radiowaves.up.forward"
         case .settings: "gearshape.fill"
+        case .power: "bolt.fill"
         }
     }
+
+    /// Tabs either side of the camera notch.
+    static let left: [NotchTab] = [.music, .files, .clipboard, .notes]
+    static let right: [NotchTab] = [.money, .airdrop, .settings]
 }
 
 @MainActor @Observable
@@ -40,6 +46,8 @@ final class NotchState {
     var hasNotch = false
     /// Somebody is dragging files toward the notch.
     var dropTargeted = false
+    /// Nothing playing and "hide when nothing is playing" is on.
+    var idleHidden = false
     /// Called when files are dragged over the closed notch.
     @ObservationIgnored var onDragEnter: (() -> Void)?
     static let panelSize = CGSize(width: 680, height: 250)
@@ -55,6 +63,10 @@ final class NotchSettings {
     /// Hide the notch completely while no music is playing.
     var hideWhenIdle = UserDefaults.standard.bool(forKey: "notchHideWhenIdle") {
         didSet { UserDefaults.standard.set(hideWhenIdle, forKey: "notchHideWhenIdle"); onChange?() }
+    }
+    /// Show the Mac's battery in the open notch.
+    var showBattery = UserDefaults.standard.object(forKey: "notchBattery") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(showBattery, forKey: "notchBattery") }
     }
     @ObservationIgnored var onChange: (() -> Void)?
 
@@ -178,12 +190,13 @@ final class NotchWindow {
         panel.setFrame(state.expanded ? expandedFrame : collapsedFrame, display: true)
     }
 
-    /// Width of the closed notch: the notch itself, plus artwork/waveform wings while a song is loaded.
+    /// Width of the closed notch: the notch itself, plus artwork/waveform wings while music plays.
+    /// Paused or stopped, it's just the notch (hovering still opens it).
     static func collapsedWidth(notch: CGSize, playing: Bool) -> CGFloat { notch.width + (playing ? 92 : 0) }
 
     private var collapsedFrame: NSRect {
         let f = screen.frame
-        let w = Self.collapsedWidth(notch: state.notchSize, playing: model.currentTrack != nil)
+        let w = Self.collapsedWidth(notch: state.notchSize, playing: model.session.state.isPlaying && model.currentTrack != nil)
         return NSRect(x: f.midX - w / 2, y: f.maxY - state.notchSize.height, width: w, height: state.notchSize.height)
     }
 
@@ -330,18 +343,26 @@ final class NotchController {
         refresh()
     }
 
-    /// Shows or hides the notches for "hide when nothing is playing".
+    /// Keeps the notches the right size as music starts and stops. They stay
+    /// in place while paused (invisible on displays without a notch when
+    /// "hide when nothing is playing" is on) so hovering still opens them.
     func refresh() {
         guard running else { return }
-        let visible = !settings.hideWhenIdle || model.session.state.isPlaying
+        let idle = !model.session.state.isPlaying
         for w in windows {
-            w.show(visible || w.state.expanded)
+            w.state.idleHidden = idle && settings.hideWhenIdle
+            w.show(true)
             w.refit()
         }
     }
 
     /// Opens the notch on the main notch display (from the menu bar), even if
     /// it's hidden because nothing is playing.
+    /// Switches the open notch(es) to a tab.
+    func select(_ tab: NotchTab) {
+        for w in windows where w.state.expanded { w.state.tab = tab }
+    }
+
     func open(tab: NotchTab = .music) {
         if !running { start() }
         (windows.first { $0.state.hasNotch } ?? windows.first)?.open(tab: tab)
@@ -400,8 +421,10 @@ struct NotchView: View {
 
     var body: some View {
         let expanded = state.expanded
-        let playing = model.currentTrack != nil
+        let playing = model.currentTrack != nil && model.session.state.isPlaying
         let notch = state.notchSize
+        // On displays without a real notch, the idle stand-in fades away (still hoverable).
+        let ghost = !expanded && !playing && state.idleHidden && !state.hasNotch
         let collapsedWidth = NotchWindow.collapsedWidth(notch: notch, playing: playing)
         let width = expanded ? NotchState.panelSize.width : collapsedWidth
         let height = expanded ? NotchState.panelSize.height : notch.height
@@ -409,7 +432,7 @@ struct NotchView: View {
         ZStack(alignment: .top) {
             UnevenRoundedRectangle(bottomLeadingRadius: expanded ? 28 : 12, bottomTrailingRadius: expanded ? 28 : 12,
                                    style: .continuous)
-                .fill(.black)
+                .fill(.black.opacity(ghost ? 0.004 : 1))
                 .shadow(color: .black.opacity(expanded ? 0.5 : 0), radius: 18, y: 8)
 
             if expanded {
@@ -437,15 +460,15 @@ private struct CollapsedWings: View {
     let height: CGFloat
 
     var body: some View {
-        let playing = model.session.state.isPlaying
         HStack(spacing: 0) {
             ArtworkView(id: model.currentTrack?.id, radius: 5)
                 .frame(width: height - 10, height: height - 10)
                 .frame(width: 46)
             Spacer(minLength: notchWidth)
-            Image(systemName: playing ? "waveform" : "pause.fill")
+            // Static on purpose: an endlessly animating symbol kept the whole
+            // notch re-rendering and cost ~20% CPU.
+            Image(systemName: "waveform")
                 .font(.system(size: 13, weight: .bold))
-                .symbolEffect(.variableColor.iterative, isActive: playing)
                 .foregroundStyle(Theme.gradient)
                 .frame(width: 46)
         }
@@ -453,62 +476,44 @@ private struct CollapsedWings: View {
     }
 }
 
-private struct ExpandedNotch: View {
+struct ExpandedNotch: View {
     @Environment(AppModel.self) private var model
     @Bindable var state: NotchState
 
     var body: some View {
         VStack(spacing: 0) {
-            // The strip level with the camera notch: labels sit either side of it.
-            HStack {
-                Text(state.tab.title.uppercased())
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced)).kerning(2)
-                    .foregroundStyle(Theme.dim)
-                Spacer(minLength: state.notchSize.width + 20)
-                Button {
-                    NSApp.activate(ignoringOtherApps: true)
-                    NSApp.windows.first { $0.canBecomeMain }?.makeKeyAndOrderFront(nil)
-                } label: {
-                    Label("Musiplex", systemImage: "macwindow").font(.system(size: 10, weight: .semibold))
+            // The strip level with the camera notch: tabs split evenly either
+            // side of it (4 left, 3 + battery right), so it looks symmetrical.
+            let side = (NotchState.panelSize.width - state.notchSize.width) / 2
+            HStack(spacing: 0) {
+                HStack(spacing: 6) {
+                    ForEach(NotchTab.left) { tabButton($0) }
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Theme.dim)
+                .frame(width: side)
+                Color.clear.frame(width: state.notchSize.width)
+                HStack(spacing: 6) {
+                    ForEach(NotchTab.right) { tabButton($0) }
+                    if model.notch.settings.showBattery, model.battery.hasBattery { BatteryBadge() }
+                }
+                .frame(width: side)
             }
-            .padding(.horizontal, 26)
-            .frame(height: state.notchSize.height)
+            .frame(height: max(state.notchSize.height, 26))
 
-            HStack(alignment: .top, spacing: 14) {
-                VStack(spacing: 2) {
-                    ForEach(NotchTab.allCases) { tab in
-                        Button { state.tab = tab } label: {
-                            Image(systemName: tab.symbol)
-                                .font(.system(size: 13, weight: .semibold))
-                                .frame(width: 30, height: 24)
-                                .foregroundStyle(state.tab == tab ? .white : Theme.dim)
-                                .background(state.tab == tab ? Color.white.opacity(0.14) : .clear,
-                                            in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .help(tab.title)
-                    }
+            Group {
+                switch state.tab {
+                case .music: NotchMusic()
+                case .files: NotchFileBox()
+                case .clipboard: NotchClipboard()
+                case .notes: NotchNotes()
+                case .money: NotchMoney()
+                case .airdrop: NotchAirDrop()
+                case .settings: NotchSettingsView()
+                case .power: NotchPower()
                 }
-
-                Group {
-                    switch state.tab {
-                    case .music: NotchMusic()
-                    case .files: NotchFileBox()
-                    case .clipboard: NotchClipboard()
-                    case .notes: NotchNotes()
-                    case .money: NotchMoney()
-                    case .airdrop: NotchAirDrop()
-                    case .settings: NotchSettingsView()
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 6)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 24)
+            .padding(.top, 8)
             .padding(.bottom, 14)
         }
         .foregroundStyle(.white)
@@ -522,6 +527,69 @@ private struct ExpandedNotch: View {
             }
             return true
         }
+    }
+}
+
+extension ExpandedNotch {
+    func tabButton(_ tab: NotchTab) -> some View {
+        Button { state.tab = tab } label: {
+            Image(systemName: tab.symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 30, height: 22)
+                .foregroundStyle(state.tab == tab ? .white : Theme.dim)
+                .background(state.tab == tab ? Color.white.opacity(0.16) : .clear,
+                            in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(tab.title)
+    }
+}
+
+/// Battery level and charging state, top right of the open notch.
+struct BatteryBadge: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let battery = model.battery
+        Button { model.notch.select(.power) } label: { badge(battery) }
+            .buttonStyle(.plain)
+            .help("Power: watts in and out")
+            .task {
+                // Only polls while the notch is open (the badge is only shown then).
+                while !Task.isCancelled {
+                    model.battery.readPower()
+                    try? await Task.sleep(for: .seconds(3))
+                }
+            }
+    }
+
+    private func badge(_ battery: Battery) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: battery.symbol)
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(color(battery), .white.opacity(0.5))
+                .font(.system(size: 13))
+            Text("\(battery.level ?? 0)%")
+                .font(.system(size: 10, weight: .semibold)).monospacedDigit()
+            // Watts in from the charger, or out of the battery.
+            let w = battery.powerIn > 0.5 ? battery.powerIn : -max(battery.systemLoad, -battery.batteryWatts)
+            if abs(w) > 0.5 {
+                Text(String(format: "%@%.0fW", w > 0 ? "+" : "−", abs(w)))
+                    .font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                    .foregroundStyle(w > 0 ? Color.green : Color.orange)
+            }
+        }
+        .padding(.horizontal, 5)
+        .frame(height: 22)
+        .background(Color.white.opacity(0.001))
+        .contentShape(Rectangle())
+    }
+
+    private func color(_ b: Battery) -> Color {
+        if b.charging || b.pluggedIn { return .green }
+        if let l = b.level, l <= 20 { return .red }
+        return .white
     }
 }
 
