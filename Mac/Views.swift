@@ -51,6 +51,7 @@ struct RootView: View {
 
 struct Sidebar: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -70,6 +71,18 @@ struct Sidebar: View {
             nav("Albums", "square.stack.fill", .albums)
             nav("Artists", "music.mic", .artists)
             nav("Settings", "gearshape.fill", .settings)
+            Button { openWindow(id: "browser") } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "safari").frame(width: 20)
+                    Text("Browser").fontWeight(.semibold)
+                    Spacer()
+                }
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .foregroundStyle(Theme.dim)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Open the browser — downloads go to Floating")
 
             Text("LIBRARY").font(.caption2.weight(.semibold)).foregroundStyle(Theme.dim)
                 .padding(.top, 22).padding(.horizontal, 10).padding(.bottom, 4)

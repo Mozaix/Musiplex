@@ -165,6 +165,19 @@ That's a few hundred bytes per song you've played. On a 929-song library with 20
   - They appear in Musiplex within a few seconds, in the Floating list under Mac **Settings**. They aren't shown in the sidebar.
   - Use **Move to** to put a song into a playlist, and it leaves Floating.
 
+## Browser (Mac)
+
+**Browser** in the sidebar (or **Open Browser** in Settings → Floating) opens a small built-in browser.
+
+- **Downloads:** anything you download is saved to **Documents › Songs › Floaters**, and music files show up in the Floating list. The download button in the toolbar shows progress.
+- **Memory:**
+  - It uses Safari's engine (WebKit), the lightest one a Mac app can use.
+  - The browser only exists while its window is open. Close it and its memory is freed.
+  - The toolbar shows the page's memory, with a warning and a **Close Browser** button above 100 MB.
+  - Typical figures: simple pages about 55 MB, Wikipedia about 77 MB, heavy video sites 300 MB or more.
+- **Ad blocking:** the shield button blocks common ad and tracker networks. It's on by default and saves memory on ad-heavy sites.
+- **Remembers:** your last site, plus logins and cookies.
+
 ## Connection: Bluetooth backup
 
 Turn on **Settings → Connection → Bluetooth backup link** to keep a Bluetooth link to the Mac open alongside Wi‑Fi. Play, pause and skip go over both links, and the Mac runs each command only once. If Wi‑Fi drops, control switches to Bluetooth straight away.

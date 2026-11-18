@@ -42,6 +42,8 @@ final class AppModel {
     /// Learns from what you play; powers Surprise and Guess. Runs on this Mac only.
     let recommender = Recommender()
     let genreLookup = GenreLookup()
+    /// The built-in browser (only exists while its window is open).
+    let browser = Browser()
     @ObservationIgnored private(set) var recorder: ListeningRecorder!
     @ObservationIgnored private var guessHour = -1
     @ObservationIgnored private var guessTimer: Timer?
@@ -102,7 +104,11 @@ final class AppModel {
         guessTimer?.tolerance = 60
         library.onPlaylistsEdited = { [weak self] ids in self?.queueAutoPush(ids) }
         notch = NotchController(model: self)
-        if let folder = UserDefaults.standard.string(forKey: "notchSnapshot") {
+        if let report = UserDefaults.standard.string(forKey: "browserTest") {
+            // Hidden test switch: open the browser off-screen, load a page and a
+            // download, write what happened to `report`, then quit.
+            DispatchQueue.main.async { [weak self] in self?.browser.selfTest(report: report, model: self!) }
+        } else if let folder = UserDefaults.standard.string(forKey: "notchSnapshot") {
             DispatchQueue.main.async { [weak self] in self?.notch.snapshot(to: folder) }
         } else if notchEnabled {
             DispatchQueue.main.async { [weak self] in self?.notch.start() }
@@ -299,6 +305,13 @@ struct MusiplexApp: App {
                 Toggle("Show Notch", isOn: Binding(get: { model.notchEnabled }, set: { model.notchEnabled = $0 }))
             }
         }
+
+        Window("Browser", id: "browser") {
+            BrowserView()
+                .environment(model)
+                .preferredColorScheme(.dark)
+        }
+        .defaultSize(width: 1100, height: 760)
 
         Window("Now Playing", id: "mini") {
             MiniPlayerView()

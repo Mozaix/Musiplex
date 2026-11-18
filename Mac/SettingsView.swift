@@ -275,6 +275,7 @@ struct TasteCard: View {
 /// haven't been put into a playlist yet.
 struct FloatingCard: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let floaters = model.library.floaters
@@ -284,6 +285,7 @@ struct FloatingCard: View {
                     Text("Put music files in **Documents › Songs › Floaters** and they appear here. Each stays until you move it into a playlist.")
                         .font(.callout).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
                     Spacer()
+                    Button("Open Browser") { openWindow(id: "browser") }
                     Button("Open Folder") { NSWorkspace.shared.open(LibraryStore.floatersFolder) }
                 }
                 if floaters.isEmpty {
