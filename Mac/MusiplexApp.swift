@@ -44,6 +44,8 @@ final class AppModel {
     let genreLookup = GenreLookup()
     /// The built-in browser (only exists while its window is open).
     let browser = Browser()
+    /// A Linux (or other) Musiplex server whose Floaters are copied here.
+    let linked = LinkedServer()
     @ObservationIgnored private(set) var recorder: ListeningRecorder!
     @ObservationIgnored private var guessHour = -1
     @ObservationIgnored private var guessTimer: Timer?
@@ -86,6 +88,7 @@ final class AppModel {
         server.start()
         remote.start()
         library.setUpSongsFolders()
+        if linked.isLinked { linked.start() }
         server.onSurprise = { [weak self] in self?.startSurprise() }
         server.onTaste = { [weak self] data in self?.recommender.merge(data) }
         server.tasteData = { [weak self] in self?.recommender.export() ?? Data() }

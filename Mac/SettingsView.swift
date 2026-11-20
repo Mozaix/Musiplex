@@ -10,6 +10,7 @@ struct SettingsView: View {
             Text("Settings").font(.system(size: 26, weight: .bold))
             TasteCard()
             FloatingCard()
+            LinkedServerCard()
             AppleMusicCard()
             RemoteAccessCard()
             VersionHistoryCard(history: model.library.history)
@@ -335,6 +336,45 @@ struct FloatingCard: View {
             while model.playlistPrompt != nil { try? await Task.sleep(for: .milliseconds(300)) }
             for id in ids where model.library.playlists.contains(where: { $0.editable && $0.tracks.contains { $0.id == id } }) {
                 model.library.dismissFloater(id)
+            }
+        }
+    }
+}
+
+/// Pair with the laptop's Musiplex server so its Floaters are copied to this Mac.
+struct LinkedServerCard: View {
+    @Environment(AppModel.self) private var model
+    @State private var address = ""
+    @State private var pin = ""
+
+    var body: some View {
+        let linked = model.linked
+        SettingsCard(title: "Linked Server", symbol: "server.rack") {
+            VStack(alignment: .leading, spacing: 10) {
+                if linked.isLinked {
+                    HStack {
+                        Circle().fill(Color.green).frame(width: 8, height: 8)
+                        Text("Linked to \(linked.name ?? "server")").font(.callout.weight(.semibold))
+                        Spacer()
+                        Button("Check Now") { Task { await linked.check() } }
+                        Button("Unlink") { linked.unlink() }
+                    }
+                    Text("New Floaters on \(linked.name ?? "the server") are copied to this Mac every minute (\(linked.hosts.joined(separator: ", "))).")
+                        .font(.caption).foregroundStyle(Theme.dim)
+                } else {
+                    Text("Copy Floaters from another Musiplex server (like your Linux laptop) to this Mac. Enter its address and the PIN it shows.")
+                        .font(.callout).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        TextField("Address, e.g. 192.168.1.20 or 100.x.y.z", text: $address).textFieldStyle(.roundedBorder)
+                        TextField("PIN", text: $pin).textFieldStyle(.roundedBorder).frame(width: 90)
+                        Button("Link") { Task { await linked.link(address: address, pin: pin) } }
+                            .disabled(address.isEmpty || pin.count < 6)
+                    }
+                }
+                if !linked.status.isEmpty {
+                    Text(linked.status + (linked.lastCheck.map { " · \($0.formatted(date: .omitted, time: .shortened))" } ?? ""))
+                        .font(.caption).foregroundStyle(Theme.dim)
+                }
             }
         }
     }
