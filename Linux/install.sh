@@ -10,6 +10,32 @@ python3 -m venv "$dest/venv"
 "$dest/venv/bin/pip" install --quiet --upgrade pip
 "$dest/venv/bin/pip" install --quiet aiohttp mutagen zeroconf
 install -m 755 "$here/musiplex_server.py" "$dest/musiplex_server.py"
+install -m 755 "$here/musiplex-open" "$dest/musiplex-open"
+
+# App menu / taskbar launcher.
+mkdir -p "$HOME/.local/share/applications" "$HOME/.local/share/icons/hicolor/256x256/apps"
+install -m 644 "$here/musiplex.png" "$HOME/.local/share/icons/hicolor/256x256/apps/musiplex.png"
+cat > "$HOME/.local/share/applications/musiplex.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Musiplex
+Comment=Your music server: now playing, songs, Floaters, pairing
+Exec=$dest/musiplex-open
+Icon=musiplex
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+StartupWMClass=Musiplex
+Actions=restart;floaters;
+
+[Desktop Action restart]
+Name=Restart server
+Exec=systemctl --user restart musiplex.service
+
+[Desktop Action floaters]
+Name=Open Floaters folder
+Exec=xdg-open $HOME/Documents/Songs/Floaters
+DESKTOP
+update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 
 cat > "$HOME/.config/systemd/user/musiplex.service" <<UNIT
 [Unit]
@@ -34,6 +60,17 @@ systemctl --user daemon-reload
 systemctl --user enable --now musiplex.service
 sleep 3
 systemctl --user --no-pager status musiplex.service | head -5 || true
+# Pin it to the KDE Plasma taskbar (skipped quietly on other desktops).
+qdbus=$(command -v qdbus6 || command -v qdbus || true)
+if [ -n "$qdbus" ]; then
+  "$qdbus" org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript '
+    panels().forEach(function (p) { p.widgets().forEach(function (w) {
+      if (w.type != "org.kde.plasma.icontasks" && w.type != "org.kde.plasma.taskmanager") return;
+      w.currentConfigGroup = ["General"];
+      var l = String(w.readConfig("launchers", ""));
+      if (l.indexOf("musiplex.desktop") < 0) w.writeConfig("launchers", (l ? l + "," : "") + "applications:musiplex.desktop");
+    }); });' >/dev/null 2>&1 && echo "Pinned Musiplex to the taskbar." || true
+fi
 echo
 "$dest/venv/bin/python" "$dest/musiplex_server.py" --show-pin | sed 's/^/Pairing PIN: /'
 echo

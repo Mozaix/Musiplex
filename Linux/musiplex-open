@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Opens the Musiplex window (starts the server first if it isn't running).
+url="http://127.0.0.1:7860/"
+if ! systemctl --user is-active --quiet musiplex.service; then
+  systemctl --user start musiplex.service
+  for _ in 1 2 3 4 5 6 7 8 9 10; do curl -s -o /dev/null "$url" && break; sleep 0.5; done
+fi
+for b in chromium brave brave-browser google-chrome-stable google-chrome vivaldi microsoft-edge-stable; do
+  if command -v "$b" >/dev/null 2>&1; then
+    exec "$b" --app="$url" --class=Musiplex --window-size=820,900 >/dev/null 2>&1
+  fi
+done
+exec xdg-open "$url"

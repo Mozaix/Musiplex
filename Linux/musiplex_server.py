@@ -7,6 +7,8 @@ exactly like it connects to a Mac: found on the home network automatically
 
 - Library: ~/Music and ~/Documents/Songs (including Songs/Floaters), rescanned
   every few minutes; tags and artwork read with mutagen.
+- Desktop window: http://127.0.0.1:7860/ (this computer only), opened by the
+  Musiplex launcher in the app menu / taskbar.
 - HTTP (port 7860): /ping, /catalog, /art/<id>, /file/<id>.<ext> (with Range),
   plus /pair, /floaters and /floater for other Musiplex servers (the Mac pulls
   new Floaters from here).
@@ -606,6 +608,63 @@ class Server:
             return web.Response(status=404)
         return web.FileResponse(path)
 
+    # ---- desktop window (only from this computer)
+
+    def local(self, request, write=False) -> bool:
+        """Only this computer, through its own address (stops other sites and other machines)."""
+        if request.remote not in ("127.0.0.1", "::1"):
+            return False
+        host = request.host.rsplit(":", 1)[0].strip("[]")
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            return False
+        return not write or request.headers.get("X-Musiplex") == "1"
+
+    async def dashboard(self, request):
+        if not self.local(request):
+            return web.Response(text="musiplex")
+        return web.Response(text=DASHBOARD, content_type="text/html")
+
+    async def local_status(self, request):
+        if not self.local(request):
+            return web.Response(status=403)
+        cur = self.library.by_id.get(self.session.current() or "")
+        floaters = []
+        if FLOATERS.exists():
+            floaters = sorted((p for p in FLOATERS.iterdir() if p.is_file() and not p.name.startswith(".")
+                               and p.suffix.lower() in AUDIO), key=lambda p: p.stat().st_mtime, reverse=True)
+        return web.json_response({
+            "name": self.name, "songs": len(self.library.tracks), "pin": self.pin,
+            "lan": self.lan_ip(), "tailscale": self.tailscale_ip(), "devices": self.devices(),
+            "state": self.session.snapshot(),
+            "current": {k: cur.get(k) for k in ("id", "title", "artist", "album", "duration")} if cur else None,
+            "hasArt": bool(cur and (self.library.art_dir / f"{cur['id']}.jpg").exists()),
+            "floatersPath": str(FLOATERS), "floaters": [p.name for p in floaters[:50]],
+            "floaterCount": len(floaters)})
+
+    async def local_songs(self, request):
+        if not self.local(request):
+            return web.Response(status=403)
+        return web.json_response([[t["id"], t["title"], t["artist"]] for t in self.library.tracks])
+
+    async def local_art(self, request):
+        if not self.local(request):
+            return web.Response(status=403)
+        tid = "".join(ch for ch in request.match_info["id"] if ch in "0123456789abcdef")
+        path = self.library.art_dir / f"{tid}.jpg"
+        return web.FileResponse(path, headers={"Content-Type": "image/jpeg"}) if path.exists() else web.Response(status=404)
+
+    async def local_cmd(self, request):
+        if not self.local(request, write=True):
+            return web.Response(status=403)
+        try:
+            command = await request.json()
+        except ValueError:
+            return web.Response(status=400)
+        if command.get("action") not in ("play", "toggle", "next", "prev", "surprise", "pause", "resume"):
+            return web.Response(status=400)
+        self.session.perform(command)
+        return web.json_response({"ok": True})
+
     # ---- WebSocket
 
     async def socket(self, request):
@@ -732,6 +791,12 @@ class Server:
         http.router.add_get("/pair", self.pair)
         http.router.add_get("/floaters", self.floaters)
         http.router.add_get("/floater", self.floater)
+        # The desktop window (this computer only).
+        http.router.add_get("/", self.dashboard)
+        http.router.add_get("/local/status", self.local_status)
+        http.router.add_get("/local/songs", self.local_songs)
+        http.router.add_get("/local/art/{id}", self.local_art)
+        http.router.add_post("/local/cmd", self.local_cmd)
         ws = web.Application()
         ws.router.add_get("/", self.socket)
         runners = []
@@ -751,6 +816,81 @@ class Server:
         finally:
             if zc:
                 await zc.async_close()
+
+
+DASHBOARD = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Musiplex</title>
+<style>
+:root{--bg:#f4f4f6;--card:#fff;--text:#16161a;--dim:#6b6b76;--line:#e4e4ea;--accent:#7c5cff;--ok:#1fa66a}
+@media (prefers-color-scheme:dark){:root{--bg:#111114;--card:#1c1c21;--text:#f2f2f5;--dim:#9a9aa6;--line:#2c2c33;--accent:#9b82ff;--ok:#3ccf8e}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:760px;margin:0 auto;padding:20px 16px;display:grid;gap:14px}
+header{display:flex;align-items:center;gap:10px}h1{font-size:20px;margin:0}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--ok)}.dot.off{background:#d04545}
+.sub{color:var(--dim)}.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+.now{display:flex;gap:16px;align-items:center}.art{width:96px;height:96px;border-radius:10px;background:var(--line);object-fit:cover;flex:none}
+.title{font-size:17px;font-weight:600}.bar{height:4px;background:var(--line);border-radius:2px;margin:10px 0 4px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);width:0}
+.times{display:flex;justify-content:space-between;color:var(--dim);font-size:12px}
+.controls{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:999px;padding:7px 14px;cursor:pointer}
+button.main{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}button:hover{filter:brightness(1.08)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media (max-width:600px){.grid{grid-template-columns:1fr}}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);margin:0 0 10px}
+.row{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line)}.row:last-child{border:0}
+code{font:13px ui-monospace,monospace}.pin{letter-spacing:.15em}
+input{width:100%;font:inherit;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+ul{list-style:none;margin:8px 0 0;padding:0;max-height:300px;overflow:auto}li{padding:7px 4px;border-bottom:1px solid var(--line);cursor:pointer;display:flex;justify-content:space-between;gap:10px}
+li:hover{background:var(--bg)}li span{color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hint{color:var(--dim);font-size:12px;margin-top:8px}
+</style></head><body><main>
+<header><span class="dot" id="dot"></span><h1 id="name">Musiplex</h1><span class="sub" id="songs"></span></header>
+<section class="card"><div class="now"><img class="art" id="art" alt="">
+<div style="flex:1;min-width:0"><div class="title" id="title">Nothing playing</div><div class="sub" id="artist"></div>
+<div class="bar"><i id="prog"></i></div><div class="times"><span id="pos"></span><span id="dur"></span></div>
+<div class="controls"><button onclick="cmd('prev')">⏮</button><button class="main" id="toggle" onclick="cmd('toggle')">Play</button>
+<button onclick="cmd('next')">⏭</button><button onclick="cmd('surprise')">✨ Surprise</button></div></div></div>
+<div class="hint" id="speaker"></div></section>
+<div class="grid">
+<section class="card"><h2>Connect a device</h2>
+<div class="row"><span>Home network</span><code id="lan">—</code></div>
+<div class="row"><span>Tailscale</span><code id="ts">off</code></div>
+<div class="row"><span>PIN</span><code class="pin" id="pin">••••••</code></div>
+<div class="hint"><a href="#" id="reveal" style="color:var(--accent)">Show PIN</a></div></section>
+<section class="card"><h2>Devices</h2><div id="devices" class="sub">None connected</div></section>
+</div>
+<section class="card"><h2>Floaters <span id="fcount"></span></h2><div class="sub"><code id="fpath"></code></div><ul id="floaters"></ul>
+<div class="hint">Drop songs in this folder: they show up on your phone in a few seconds, and on your Mac within a minute.</div></section>
+<section class="card"><h2>Songs</h2><input id="q" placeholder="Search songs or artists" autocomplete="off"><ul id="list"></ul></section>
+</main><script>
+let st=null,songs=[],showPin=false,artId=null,base=0;
+const $=id=>document.getElementById(id);
+const fmt=s=>{s=Math.max(0,Math.floor(s||0));return Math.floor(s/60)+":"+String(s%60).padStart(2,"0")};
+const esc=t=>String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+async function cmd(action,extra){await fetch("/local/cmd",{method:"POST",headers:{"Content-Type":"application/json","X-Musiplex":"1"},body:JSON.stringify(Object.assign({action},extra||{}))});poll()}
+async function poll(){
+  try{const r=await fetch("/local/status");st=await r.json();base=performance.now();$("dot").className="dot"}catch(e){$("dot").className="dot off";$("songs").textContent="server not running";return}
+  $("name").textContent=st.name;$("songs").textContent=st.songs.toLocaleString()+" songs";
+  $("lan").textContent=st.lan||"—";$("ts").textContent=st.tailscale||"off";$("pin").textContent=showPin?st.pin:"••••••";
+  const c=st.current;$("title").textContent=c?c.title:"Nothing playing";$("artist").textContent=c?c.artist+" · "+c.album:"";
+  if(c&&st.hasArt&&artId!==c.id){$("art").src="/local/art/"+c.id;artId=c.id}else if(!c||!st.hasArt){$("art").removeAttribute("src");artId=null}
+  $("toggle").textContent=st.state.isPlaying?"Pause":"Play";
+  $("devices").innerHTML=st.devices.length?st.devices.map(d=>'<div class="row"><span>'+esc(d.name)+'</span><span class="sub">'+esc(d.kind)+(d.id===st.state.activeDevice?" · speaker":"")+'</span></div>').join(""):"None connected";
+  $("speaker").textContent=st.devices.length?"":"This computer has no speaker of its own in Musiplex: open Musiplex on your phone and the sound plays there.";
+  $("fcount").textContent="("+st.floaterCount+")";$("fpath").textContent=st.floatersPath;
+  $("floaters").innerHTML=st.floaters.map(n=>"<li>"+esc(n)+"</li>").join("")||'<li class="sub">Empty</li>';
+  if(songs.length!==st.songs)loadSongs();tick()}
+function tick(){if(!st||!st.current)return;const d=st.current.duration||0;let p=st.state.position+(st.state.isPlaying?(performance.now()-base)/1000:0);p=Math.min(p,d);
+  $("pos").textContent=fmt(p);$("dur").textContent=fmt(d);$("prog").style.width=(d?p/d*100:0)+"%"}
+async function loadSongs(){songs=await (await fetch("/local/songs")).json();render()}
+function render(){const q=$("q").value.trim().toLowerCase();const hits=(q?songs.filter(s=>(s[1]+" "+s[2]).toLowerCase().includes(q)):songs).slice(0,200);
+  $("list").innerHTML=hits.map(s=>'<li data-id="'+s[0]+'">'+esc(s[1])+"<span>"+esc(s[2])+"</span></li>").join("")}
+$("list").onclick=e=>{const li=e.target.closest("li");if(!li)return;const q=$("q").value.trim().toLowerCase();
+  const ids=(q?songs.filter(s=>(s[1]+" "+s[2]).toLowerCase().includes(q)):songs).map(s=>s[0]);cmd("play",{ids,index:ids.indexOf(li.dataset.id)})};
+$("q").oninput=render;$("reveal").onclick=e=>{e.preventDefault();showPin=!showPin;$("reveal").textContent=showPin?"Hide PIN":"Show PIN";poll()};
+poll();setInterval(()=>{if(!document.hidden)poll()},3000);setInterval(tick,500);
+</script></body></html>"""
 
 
 def main():
