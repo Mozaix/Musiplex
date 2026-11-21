@@ -39,9 +39,14 @@ final class Server {
     let macName = Host.current().localizedName ?? "Mac"
 
     var phones: [Client] { clients.filter { $0.authed && !$0.backup } }
+    /// Phones and iPads you can pick as the speaker (not a linked server's live link).
+    var listeners: [Client] { phones.filter { $0.kind != "server" } }
 
     /// Every device that can be picked as the speaker, this Mac first.
-    var devices: [DeviceInfo] { [DeviceInfo(id: "mac", name: macName, kind: "mac")] + phones.map(\.info) }
+    /// (A linked server's live link, kind "server", follows along but is never a speaker.)
+    var devices: [DeviceInfo] {
+        [DeviceInfo(id: "mac", name: macName, kind: "mac")] + listeners.map(\.info)
+    }
 
     /// The key a linked server (the laptop) uses to pass your phones through to this Mac.
     var chainToken: String { token }

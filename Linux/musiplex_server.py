@@ -54,6 +54,13 @@ HOME = Path.home()
 FLOATERS = Path(os.environ.get("MUSIPLEX_FLOATERS", HOME / "Documents" / "Songs" / "Floaters"))
 
 
+def song_key(title: str, artist: str) -> str:
+    """Same song on two machines (the Mac's songKey): case, accents and punctuation ignored."""
+    def norm(s):
+        return "".join(ch for ch in unicodedata.normalize("NFKD", (s or "").casefold()) if ch.isalnum())
+    return f"{norm(title)}|{norm(artist)}"
+
+
 def track_id(path: str) -> str:
     """Same as the Mac: first 8 bytes of SHA-256 of the NFC path, as hex."""
     normal = unicodedata.normalize("NFC", path)
@@ -509,6 +516,12 @@ class Server:
         self.leader: dict | None = cfg.get("leader")
         self.leader_at = 0.0
         self.client: ClientSession | None = None
+        # Live link to the linked Mac (for the window): its session and songs.
+        self.mac_ws = None
+        self.mac_state: dict | None = None
+        self.mac_state_at = 0.0
+        self.mac_tracks: dict[str, dict] = {}
+        self.mac_keys: dict[str, str] = {}
 
     # ---- helpers
 
@@ -681,16 +694,26 @@ class Server:
             "current": {k: cur.get(k) for k in ("id", "title", "artist", "album", "duration")} if cur else None,
             "hasArt": bool(cur and (self.library.art_dir / f"{cur['id']}.jpg").exists()),
             "floatersPath": str(FLOATERS), "floaters": [p.name for p in floaters[:50]],
-            "floaterCount": len(floaters), "remote": self.remote_view(), "version": DASHBOARD_VERSION},
+            "floaterCount": len(floaters), "remote": self.remote_view(), "macLink": self.mac_ws is not None, "version": DASHBOARD_VERSION},
             headers={"Cache-Control": "no-store"})
 
     def remote_view(self):
         r = self.remote
-        if not r or now() - r["at"] > 20 or not r.get("track"):
-            return None
-        t = dict(r["track"])
-        if t.get("isPlaying"):
-            t["position"] = (t.get("position") or 0) + now() - r["at"]
+        st = self.mac_state if self.mac_ws is not None else None
+        if st is not None:                 # live from the Mac link: changes show at once
+            q, i = st.get("queue") or [], st.get("index") or 0
+            mt = self.mac_tracks.get(q[i]) if 0 <= i < len(q) else None
+            if not mt:
+                return None
+            t = {k: mt.get(k) for k in ("title", "artist", "album", "duration")}
+            t["isPlaying"] = bool(st.get("isPlaying"))
+            t["position"] = (st.get("position") or 0) + (now() - self.mac_state_at if t["isPlaying"] else 0)
+        else:
+            if not r or now() - r["at"] > 20 or not r.get("track"):
+                return None
+            t = dict(r["track"])
+            if t.get("isPlaying"):
+                t["position"] = (t.get("position") or 0) + now() - r["at"]
         key = (str(t.get("title", "")).lower(), str(t.get("artist", "")).lower())
         mine = next((x for x in self.library.tracks if (x["title"].lower(), x["artist"].lower()) == key), None)
         t["artID"] = mine["id"] if mine and (self.library.art_dir / f"{mine['id']}.jpg").exists() else None
@@ -740,6 +763,21 @@ class Server:
             return web.Response(status=400)
         if command.get("action") not in ("play", "toggle", "next", "prev", "surprise", "pause", "resume"):
             return web.Response(status=400)
+        if command.get("target") == "remote" and self.mac_ws is not None:   # straight to the Mac, at once
+            if command["action"] == "play":
+                ids, i = command.get("ids") or [], command.get("index") or 0
+                t = self.library.by_id.get(ids[i]) if 0 <= i < len(ids) else None
+                mac_id = self.mac_keys.get(song_key(t["title"], t["artist"])) if t else None
+                if not mac_id:
+                    return web.Response(status=404)
+                command = {"action": "play", "ids": [mac_id], "index": 0}
+            else:
+                command = {"action": command["action"]}
+            try:
+                await self.mac_ws.send_str(json.dumps({"type": "command", "command": command}))
+                return web.json_response({"ok": True})
+            except (ClientError, ConnectionResetError, RuntimeError):
+                pass                                  # fall back to the next report
         if command.get("target") == "remote":         # a button for the linked Mac
             if command["action"] == "play":
                 ids, i = command.get("ids") or [], command.get("index") or 0
@@ -760,7 +798,7 @@ class Server:
         if self.leader_live():
             try:
                 up = await self.client.ws_connect(f"ws://{self.leader['host']}:{self.leader['ws']}/",
-                                                  heartbeat=30, max_msg_size=8 << 20, timeout=ClientTimeout(total=4))
+                                                  heartbeat=30, max_msg_size=8 << 20)
             except (ClientError, asyncio.TimeoutError, OSError):
                 up = None
             if up is not None:
@@ -781,6 +819,48 @@ class Server:
             if client and client["authed"]:
                 self.device_left(client)
         return ws
+
+    async def mac_link(self):
+        """While the linked Mac is on: a live connection to it, so the window shows its song
+        the moment it changes and its buttons act at once (no waiting for the next report)."""
+        while True:
+            if not self.leader_live():
+                await asyncio.sleep(2)
+                continue
+            lead = self.leader
+            try:
+                await self.load_mac_catalog(lead)
+                ws = await self.client.ws_connect(f"ws://{lead['host']}:{lead['ws']}/", heartbeat=30,
+                                                  max_msg_size=16 << 20)
+                await ws.send_str(json.dumps({"type": "hello", "token": lead["token"], "kind": "server",
+                                              "deviceID": "server-" + self.token[:12], "name": self.name}))
+                async for msg in ws:
+                    if msg.type != WSMsgType.TEXT:
+                        continue
+                    m = json.loads(msg.data)
+                    kind = m.get("type")
+                    if kind in ("welcome", "state", "promoted") and m.get("state"):
+                        self.mac_ws = ws
+                        self.mac_state, self.mac_state_at = m["state"], now()
+                    elif kind == "tick" and self.mac_state is not None:
+                        self.mac_state["position"] = m.get("position") or 0
+                        self.mac_state["isPlaying"] = bool(m.get("isPlaying"))
+                        self.mac_state_at = now()
+                    elif kind == "library":
+                        await self.load_mac_catalog(lead)
+                    elif kind == "denied":
+                        break
+            except (ClientError, asyncio.TimeoutError, OSError, ValueError):
+                pass
+            self.mac_ws, self.mac_state = None, None
+            await asyncio.sleep(3)
+
+    async def load_mac_catalog(self, lead):
+        async with self.client.get(f"http://{lead['host']}:{lead['http']}/catalog?t={lead['token']}") as r:
+            cat = await r.json(content_type=None)
+        tracks = cat.get("tracks") or []
+        self.mac_tracks = {t["id"]: t for t in tracks}
+        self.mac_keys = {song_key(t.get("title", ""), t.get("artist", "")): t["id"] for t in tracks}
 
     async def relay(self, ws, up):
         """Chain: this phone talks to the linked Mac through here. Its hello is let in with
@@ -945,7 +1025,7 @@ class Server:
         print(f"  home network: {self.lan_ip()}  ·  Tailscale: {self.tailscale_ip() or 'off'}", flush=True)
         print(f"  ports: {self.http_port} (HTTP), {self.ws_port} (WebSocket)", flush=True)
         try:
-            await asyncio.gather(self.ticker(), self.rescanner())
+            await asyncio.gather(self.ticker(), self.rescanner(), self.mac_link())
         finally:
             if zc:
                 await zc.async_close()
@@ -1002,7 +1082,7 @@ const $=id=>document.getElementById(id);
 const fmt=s=>{s=Math.max(0,Math.floor(s||0));return Math.floor(s/60)+":"+String(s%60).padStart(2,"0")};
 const esc=t=>String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 async function cmd(action,extra){const body=Object.assign({action},extra||{});if(remote)body.target="remote";
-  await fetch("/local/cmd",{method:"POST",headers:{"Content-Type":"application/json","X-Musiplex":"1"},body:JSON.stringify(body)});setTimeout(poll,remote?2500:0)}
+  await fetch("/local/cmd",{method:"POST",headers:{"Content-Type":"application/json","X-Musiplex":"1"},body:JSON.stringify(body)});setTimeout(poll,150)}
 async function poll(){
   try{const r=await fetch("/local/status");st=await r.json();if(st.version&&st.version!==VERSION){location.reload();return}base=performance.now();$("dot").className="dot"}catch(e){$("dot").className="dot off";$("songs").textContent="server not running";return}
   $("name").textContent=st.name;$("songs").textContent=st.songs.toLocaleString()+" songs";
@@ -1026,7 +1106,7 @@ function render(){const q=$("q").value.trim().toLowerCase();const hits=(q?songs.
 $("list").onclick=e=>{const li=e.target.closest("li");if(!li)return;const q=$("q").value.trim().toLowerCase();
   const ids=(q?songs.filter(s=>(s[1]+" "+s[2]).toLowerCase().includes(q)):songs).map(s=>s[0]);cmd("play",{ids,index:ids.indexOf(li.dataset.id)})};
 $("q").oninput=render;$("reveal").onclick=e=>{e.preventDefault();showPin=!showPin;$("reveal").textContent=showPin?"Hide PIN":"Show PIN";poll()};
-poll();setInterval(()=>{if(!document.hidden)poll()},3000);setInterval(tick,500);
+poll();setInterval(()=>{if(!document.hidden)poll()},1000);setInterval(tick,500);
 </script></body></html>"""
 
 DASHBOARD_VERSION = hashlib.sha256(DASHBOARD.encode()).hexdigest()[:12]

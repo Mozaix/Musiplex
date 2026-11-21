@@ -59,7 +59,7 @@ struct PlayerBar: View {
                     .help("Mini player: hide this window and show a small floating player")
                 Button { showDevices.toggle() } label: {
                     Image(systemName: state.activeDevice == "mac" ? "hifispeaker.and.homepod" : "iphone.radiowaves.left.and.right")
-                        .foregroundStyle(model.server.phones.isEmpty ? Theme.dim : Theme.accent)
+                        .foregroundStyle(model.server.listeners.isEmpty ? Theme.dim : Theme.accent)
                 }
                 .buttonStyle(.plain)
                 .popover(isPresented: $showDevices, arrowEdge: .top) { devicePicker }
@@ -102,12 +102,12 @@ struct PlayerBar: View {
         return VStack(alignment: .leading, spacing: 6) {
             Text("Listen on").font(.headline).padding(.bottom, 4)
             deviceRow("This Mac", "laptopcomputer", selected: active == "mac") { model.send("device", text: "mac") }
-            ForEach(model.server.phones) { phone in
+            ForEach(model.server.listeners) { phone in
                 deviceRow(phone.name, phone.info.symbol, selected: active == phone.deviceID) {
                     model.send("device", text: phone.deviceID)
                 }
             }
-            if model.server.phones.isEmpty {
+            if model.server.listeners.isEmpty {
                 Text("No iPhone or iPad connected").font(.caption).foregroundStyle(Theme.dim)
             }
         }

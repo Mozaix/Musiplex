@@ -96,7 +96,7 @@ struct PhoneRoot: View {
                         CollectionScreen(list: album, kind: "Album")
                     }
                 case .playlist(let id):
-                    if let list = model.playlists.first(where: { $0.id == id }) ?? model.forYou.first(where: { $0.id == id }) {
+                    if let list = model.shownPlaylists.first(where: { $0.id == id }) ?? model.forYou.first(where: { $0.id == id }) {
                         CollectionScreen(list: list, kind: "Playlist")
                     }
                 }
@@ -183,8 +183,8 @@ struct PhoneRoot: View {
                 }
                 .padding(.horizontal, 16).padding(.bottom, 10)
             }
-            if model.playlists.isEmpty { EmptyState(tab: tab) }
-            ForEach(model.playlists) { list in
+            if model.shownPlaylists.isEmpty { EmptyState(tab: tab) }
+            ForEach(model.shownPlaylists) { list in
                 NavigationLink(value: PhoneRoute.playlist(list.id)) {
                     PlaylistRow(list: list)
                 }
@@ -389,9 +389,9 @@ struct EmptyState: View {
             ("arrow.down.circle", "Nothing downloaded yet",
              "Tap the arrow next to a song, album or playlist — or Download Everything — to keep music on this \(model.deviceWord).")
         case .playlists:
-            ("music.note.list", model.isLinked ? "No playlists" : "Not connected",
+            ("music.note.list", model.isLinked ? "No playlists" : "No playlists offline",
              model.isLinked ? "Playlists from Apple Music on your Mac, and .m3u files in imported folders, show up here."
-                 : "Connect to your Mac to see your playlists.")
+                 : "Offline, playlists show the songs downloaded to this \(model.deviceWord). Download a playlist while connected to keep it here.")
         default:
             model.isLinked
                 ? ("music.note", "Nothing here", "No songs match.")

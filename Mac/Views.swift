@@ -258,7 +258,7 @@ struct DevicesCard: View {
                 tailscaleRow
                 row("Pairing PIN", server.pin)
             }
-            ForEach(server.phones) { phone in
+            ForEach(server.listeners) { phone in
                 let audible = model.session.state.activeDevice == phone.deviceID
                 HStack(spacing: 8) {
                     Image(systemName: phone.info.symbol).foregroundStyle(Theme.accent).frame(width: 16)
@@ -281,7 +281,7 @@ struct DevicesCard: View {
                     .font(.caption2).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if server.phones.isEmpty, server.error == nil {
+            if server.listeners.isEmpty, server.error == nil {
                 Text("Open Musiplex on your iPhone or iPad to connect — over Wi‑Fi, Tailscale or Bluetooth.")
                     .font(.caption2).foregroundStyle(Theme.dim)
             }
@@ -692,9 +692,9 @@ struct CollectionView: View {
                     Image(systemName: "shuffle").font(.title2).foregroundStyle(Theme.dim)
                 }
                 .buttonStyle(.plain)
-                if !model.server.phones.isEmpty {
+                if !model.server.listeners.isEmpty {
                     Menu {
-                        ForEach(model.server.phones) { phone in
+                        ForEach(model.server.listeners) { phone in
                             Button("Download to \(phone.name)", systemImage: phone.info.symbol) {
                                 model.server.push(tracks.map(\.id), to: phone.deviceID)
                             }

@@ -136,6 +136,8 @@ final class PhoneModel {
             return image
         }
 
+        loadSavedCatalog()
+
         appleMusic.source = { [unowned self] in
             guard link == .wifi || link == .nearby, !rawCatalog.tracks.isEmpty else { return nil }
             return (rawCatalog.tracks, rawCatalog.playlists, UIDevice.current.name)
@@ -160,6 +162,16 @@ final class PhoneModel {
 
     /// Songs to browse: the Mac's library when linked, otherwise what's on this device.
     var songs: [Track] { isLinked ? macTracks : downloads.tracks }
+
+    /// Playlists to show. Offline: the saved ones, trimmed to the songs on this device.
+    var shownPlaylists: [Playlist] {
+        if isLinked { return playlists }
+        return playlists.compactMap { list in
+            var copy = list
+            copy.trackIDs = list.trackIDs.filter { isDownloaded($0) }
+            return copy.trackIDs.isEmpty ? nil : copy
+        }
+    }
 
     var albums: [Playlist] {
         if isLinked { return macAlbums }
@@ -585,7 +597,24 @@ final class PhoneModel {
         }
     }
 
-    private func apply(_ catalog: Catalog) {
+    /// The last catalog from the Mac, kept so playlists are there offline too.
+    private var catalogFile: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("catalog.json")
+    }
+
+    private func loadSavedCatalog() {
+        guard let data = try? Data(contentsOf: catalogFile),
+              let catalog = try? JSONDecoder().decode(Catalog.self, from: data) else { return }
+        apply(catalog, save: false)
+    }
+
+    private func apply(_ catalog: Catalog, save: Bool = true) {
+        if save {
+            let file = catalogFile
+            Task.detached(priority: .utility) {
+                if let data = try? JSONEncoder().encode(catalog) { try? data.write(to: file, options: .atomic) }
+            }
+        }
         rawCatalog = catalog
         history = catalog.history ?? history
         appleMusic.schedule()
