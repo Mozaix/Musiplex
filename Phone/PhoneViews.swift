@@ -3,7 +3,7 @@ import SwiftUI
 @main
 struct MusiplexPhoneApp: App {
     @UIApplicationDelegateAdaptor(PhoneAppDelegate.self) private var delegate
-    @State private var model = PhoneModel()
+    @State private var model = PhoneModel.shared
     @Environment(\.scenePhase) private var phase
 
     var body: some Scene {

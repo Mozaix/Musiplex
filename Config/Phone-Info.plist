@@ -4,6 +4,12 @@
 <dict>
 	<key>CFBundleDisplayName</key>
 	<string>Musiplex</string>
+	<key>INAlternativeAppNames</key>
+	<array>
+		<dict><key>INAlternativeAppName</key><string>Music Plex</string></dict>
+		<dict><key>INAlternativeAppName</key><string>Musicplex</string></dict>
+		<dict><key>INAlternativeAppName</key><string>Musi Plex</string></dict>
+	</array>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>

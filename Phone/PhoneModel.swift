@@ -7,6 +7,9 @@ import UIKit
 
 @MainActor @Observable
 final class PhoneModel {
+    /// The one model, shared with Siri commands.
+    static let shared = PhoneModel()
+
     /// wifi = home network or Tailscale (streams audio); nearby = Bluetooth /
     /// peer-to-peer (control + downloads, downloaded songs only for audio).
     enum Link: Equatable { case searching, connecting, needsPIN, wifi, nearby, offline }
@@ -117,6 +120,7 @@ final class PhoneModel {
             localCopy(id) ?? upcoming.url(for: id) ?? (link == .wifi ? remoteURL("file/\(id).\(track(id)?.ext ?? "m4a")") : nil)
         }
         session.onApplied = { [unowned self] in
+            rememberLast()
             publish()
             prefetchUpcoming()
             listenedOffline()
@@ -637,6 +641,49 @@ final class PhoneModel {
             Playlist(id: "auto-guess", name: "Guess", subtitle: "auto · \(Recommender.moment())",
                      trackIDs: recommender.guess(tracks: local)),
         ]
+    }
+
+    // MARK: Siri
+
+    /// Siri may start the app in the background: connect, and wait a moment for it.
+    func readyForSiri() async {
+        if link != .wifi, link != .nearby { reconnect() }
+        var waited = 0
+        while link == .searching || link == .connecting, waited < 40 {
+            try? await Task.sleep(for: .milliseconds(100))
+            waited += 1
+        }
+    }
+
+    private var lastSaved: String?
+
+    /// Remembers the song (and its album) playing now, for "Play music".
+    private func rememberLast() {
+        guard let t = currentTrack, t.id != lastSaved else { return }
+        lastSaved = t.id
+        let d = UserDefaults.standard
+        d.set(t.id, forKey: "lastTrackID")
+        d.set(t.album, forKey: "lastAlbum")
+        d.set(t.artist, forKey: "lastArtist")
+    }
+
+    /// The album you last listened to, from the song you were on (Surprise if there's none yet).
+    func playLastAlbum() {
+        let d = UserDefaults.standard
+        guard let lastID = d.string(forKey: "lastTrackID") else { return startSurprise() }
+        let name = d.string(forKey: "lastAlbum")?.lowercased()
+        let list = albums.first { $0.trackIDs.contains(lastID) }
+            ?? albums.first { $0.name.lowercased() == name && name != nil }
+        guard let list else { return startSurprise() }
+        let songs = isLinked ? tracks(list) : tracks(list).filter { isDownloaded($0.id) }
+        guard !songs.isEmpty else { return startSurprise() }
+        play(songs, at: songs.firstIndex { $0.id == lastID } ?? 0)
+    }
+
+    /// Stops everything: this device, and the Mac too when connected.
+    func stopForSiri() {
+        send(Command(action: "pause"))
+        session.core.setPlaying(false)
     }
 
     /// Starts Surprise: on the Mac when connected, otherwise from this device's downloads.
