@@ -75,6 +75,7 @@ final class AppModel {
         session.onApplied = { [weak self] in
             self?.notch?.refresh()
             self?.listened()
+            self?.linked.playbackChanged("\(session.state.currentID ?? "")|\(session.state.isPlaying)")
             bridge.update(track: library.track(session.state.currentID),
                           position: session.livePosition, playing: session.state.isPlaying)
             UserDefaults.standard.set(session.state.volume, forKey: "volume")
@@ -89,6 +90,24 @@ final class AppModel {
         remote.start()
         library.setUpSongsFolders()
         if linked.isLinked { linked.start() }
+        linked.nowPlaying = { [weak self] in
+            guard let self, let t = self.library.track(self.session.state.currentID) else { return nil }
+            return ["title": t.title, "artist": t.artist, "album": t.album, "duration": t.duration,
+                    "position": self.session.livePosition, "isPlaying": self.session.state.isPlaying]
+        }
+        linked.onCommand = { [weak self] c in
+            guard let self, let action = c["action"] as? String else { return }
+            switch action {
+            case "toggle", "next", "prev": self.session.perform(Command(action: action))
+            case "surprise": self.startSurprise()
+            case "play":
+                let key = songKey(title: c["title"] as? String ?? "", artist: c["artist"] as? String ?? "")
+                if let t = self.library.tracks.first(where: { songKey(title: $0.title, artist: $0.artist) == key }) {
+                    self.session.perform(Command(action: "play", ids: [t.id], index: 0))
+                }
+            default: break
+            }
+        }
         server.onSurprise = { [weak self] in self?.startSurprise() }
         server.onTaste = { [weak self] data in self?.recommender.merge(data) }
         server.tasteData = { [weak self] in self?.recommender.export() ?? Data() }

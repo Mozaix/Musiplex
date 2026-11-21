@@ -6,6 +6,10 @@ import Observation
 /// checks every minute and downloads any new Floaters into
 /// Documents/Songs/Floaters (one way: laptop → Mac). Files are only fetched
 /// once, so moving or deleting them here doesn't bring them back.
+///
+/// While linked, this Mac also tells the server what it's playing (every 2 s
+/// while playing, 6 s when paused, and right away on a change), so the server's
+/// window shows this Mac's song. Buttons pressed there come back in the reply.
 @MainActor @Observable
 final class LinkedServer {
     private(set) var name = UserDefaults.standard.string(forKey: "linkedName")
@@ -20,6 +24,13 @@ final class LinkedServer {
     @ObservationIgnored private var fetched = Set(UserDefaults.standard.stringArray(forKey: "linkedFetched") ?? [])
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var busy = false
+    /// What's playing here, for the server's window (nil = nothing).
+    @ObservationIgnored var nowPlaying: () -> [String: Any]? = { nil }
+    /// A button pressed in the server's window: ["action": "toggle" | "next" | "prev" | "surprise" | "play", ...].
+    @ObservationIgnored var onCommand: ([String: Any]) -> Void = { _ in }
+    @ObservationIgnored private var liveTask: Task<Void, Never>?
+    @ObservationIgnored private var liveHost: String?
+    @ObservationIgnored private var wake: CheckedContinuation<Void, Never>?
     @ObservationIgnored private let session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
         c.timeoutIntervalForRequest = 8
@@ -33,6 +44,66 @@ final class LinkedServer {
         }
         timer?.tolerance = 10
         Task { await check() }
+        startLive()
+    }
+
+    @ObservationIgnored private var lastKey = ""
+
+    /// Call when playback may have changed; tells the server at once if the song or play/pause did.
+    func playbackChanged(_ key: String) {
+        guard key != lastKey else { return }
+        lastKey = key
+        poke()
+    }
+
+    private func poke() {
+        wake?.resume()
+        wake = nil
+    }
+
+    private func startLive() {
+        guard liveTask == nil else { return }
+        liveTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.isLinked else { return }
+                let playing = await self.pushNowPlaying()
+                await self.sleep(playing ? 2 : 6)
+            }
+        }
+    }
+
+    private func sleep(_ seconds: Double) async {
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            wake = c
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(seconds))
+                self?.poke()
+            }
+        }
+    }
+
+    /// Sends what's playing; runs any buttons pressed in the server's window. Returns whether it's playing.
+    private func pushNowPlaying() async -> Bool {
+        guard let token else { return false }
+        let info = nowPlaying()
+        let body = (try? JSONSerialization.data(withJSONObject: ["name": Host.current().localizedName ?? "Mac",
+                                                                  "track": info.map { $0 as Any } ?? NSNull()])) ?? Data()
+        for host in [liveHost].compactMap({ $0 }) + hosts.filter({ $0 != liveHost }) {
+            guard let url = URL(string: "http://\(host):\(Net.httpPort)/linked/nowplaying?t=\(token)") else { continue }
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.timeoutInterval = 4
+            guard let (data, response) = try? await session.data(for: request),
+                  (response as? HTTPURLResponse)?.statusCode == 200 else { continue }
+            liveHost = host
+            let reply = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            for command in reply?["commands"] as? [[String: Any]] ?? [] { onCommand(command) }
+            return info?["isPlaying"] as? Bool ?? false
+        }
+        liveHost = nil
+        return false
     }
 
     /// Pairs with a server using the PIN it shows.
@@ -63,6 +134,7 @@ final class LinkedServer {
     }
 
     func unlink() {
+        liveTask?.cancel(); liveTask = nil; poke()
         token = nil; name = nil; hosts = []; status = ""
         for key in ["linkedToken", "linkedName", "linkedHosts"] { UserDefaults.standard.removeObject(forKey: key) }
     }

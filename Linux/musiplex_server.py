@@ -500,6 +500,8 @@ class Server:
         self.clients: dict[web.WebSocketResponse, dict] = {}
         self.seen_seqs: dict[str, list[int]] = {}
         self.pin_failures = 0
+        self.remote: dict | None = None        # what a linked Mac is playing (for the window)
+        self.remote_commands: list[dict] = []  # buttons pressed for it, sent back in its next report
 
     # ---- helpers
 
@@ -639,7 +641,33 @@ class Server:
             "current": {k: cur.get(k) for k in ("id", "title", "artist", "album", "duration")} if cur else None,
             "hasArt": bool(cur and (self.library.art_dir / f"{cur['id']}.jpg").exists()),
             "floatersPath": str(FLOATERS), "floaters": [p.name for p in floaters[:50]],
-            "floaterCount": len(floaters)})
+            "floaterCount": len(floaters), "remote": self.remote_view()})
+
+    def remote_view(self):
+        r = self.remote
+        if not r or now() - r["at"] > 20 or not r.get("track"):
+            return None
+        t = dict(r["track"])
+        if t.get("isPlaying"):
+            t["position"] = (t.get("position") or 0) + now() - r["at"]
+        key = (str(t.get("title", "")).lower(), str(t.get("artist", "")).lower())
+        mine = next((x for x in self.library.tracks if (x["title"].lower(), x["artist"].lower()) == key), None)
+        t["artID"] = mine["id"] if mine and (self.library.art_dir / f"{mine['id']}.jpg").exists() else None
+        t["from"] = r.get("name") or "Mac"
+        return t
+
+    async def linked_nowplaying(self, request):
+        """A linked Mac reports what it's playing; gets back buttons pressed for it in the window."""
+        if not self.authorized(request):
+            return web.Response(status=401)
+        try:
+            body = await request.json()
+        except ValueError:
+            return web.Response(status=400)
+        track = body.get("track") if isinstance(body.get("track"), dict) else None
+        self.remote = {"name": str(body.get("name") or "Mac")[:80], "track": track, "at": now()}
+        commands, self.remote_commands = self.remote_commands, []
+        return web.json_response({"commands": commands})
 
     async def local_songs(self, request):
         if not self.local(request):
@@ -662,6 +690,15 @@ class Server:
             return web.Response(status=400)
         if command.get("action") not in ("play", "toggle", "next", "prev", "surprise", "pause", "resume"):
             return web.Response(status=400)
+        if command.get("target") == "remote":         # a button for the linked Mac
+            if command["action"] == "play":
+                ids, i = command.get("ids") or [], command.get("index") or 0
+                t = self.library.by_id.get(ids[i]) if 0 <= i < len(ids) else None
+                if not t:
+                    return web.Response(status=400)
+                command = {"action": "play", "title": t["title"], "artist": t["artist"]}
+            self.remote_commands = (self.remote_commands + [{k: command[k] for k in ("action", "title", "artist") if k in command}])[-10:]
+            return web.json_response({"ok": True})
         self.session.perform(command)
         return web.json_response({"ok": True})
 
@@ -797,6 +834,7 @@ class Server:
         http.router.add_get("/local/songs", self.local_songs)
         http.router.add_get("/local/art/{id}", self.local_art)
         http.router.add_post("/local/cmd", self.local_cmd)
+        http.router.add_post("/linked/nowplaying", self.linked_nowplaying)
         ws = web.Application()
         ws.router.add_get("/", self.socket)
         runners = []
@@ -847,7 +885,7 @@ li:hover{background:var(--bg)}li span{color:var(--dim);white-space:nowrap;overfl
 </style></head><body><main>
 <header><span class="dot" id="dot"></span><h1 id="name">Musiplex</h1><span class="sub" id="songs"></span></header>
 <section class="card"><div class="now"><img class="art" id="art" alt="">
-<div style="flex:1;min-width:0"><div class="title" id="title">Nothing playing</div><div class="sub" id="artist"></div>
+<div style="flex:1;min-width:0"><div class="sub" id="from" style="font-size:12px"></div><div class="title" id="title">Nothing playing</div><div class="sub" id="artist"></div>
 <div class="bar"><i id="prog"></i></div><div class="times"><span id="pos"></span><span id="dur"></span></div>
 <div class="controls"><button onclick="cmd('prev')">⏮</button><button class="main" id="toggle" onclick="cmd('toggle')">Play</button>
 <button onclick="cmd('next')">⏭</button><button onclick="cmd('surprise')">✨ Surprise</button></div></div></div>
@@ -864,20 +902,24 @@ li:hover{background:var(--bg)}li span{color:var(--dim);white-space:nowrap;overfl
 <div class="hint">Drop songs in this folder: they show up on your phone in a few seconds, and on your Mac within a minute.</div></section>
 <section class="card"><h2>Songs</h2><input id="q" placeholder="Search songs or artists" autocomplete="off"><ul id="list"></ul></section>
 </main><script>
-let st=null,songs=[],showPin=false,artId=null,base=0;
+let st=null,remote=false,songs=[],showPin=false,artId=null,base=0;
 const $=id=>document.getElementById(id);
 const fmt=s=>{s=Math.max(0,Math.floor(s||0));return Math.floor(s/60)+":"+String(s%60).padStart(2,"0")};
 const esc=t=>String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-async function cmd(action,extra){await fetch("/local/cmd",{method:"POST",headers:{"Content-Type":"application/json","X-Musiplex":"1"},body:JSON.stringify(Object.assign({action},extra||{}))});poll()}
+async function cmd(action,extra){const body=Object.assign({action},extra||{});if(remote)body.target="remote";
+  await fetch("/local/cmd",{method:"POST",headers:{"Content-Type":"application/json","X-Musiplex":"1"},body:JSON.stringify(body)});setTimeout(poll,remote?2500:0)}
 async function poll(){
   try{const r=await fetch("/local/status");st=await r.json();base=performance.now();$("dot").className="dot"}catch(e){$("dot").className="dot off";$("songs").textContent="server not running";return}
   $("name").textContent=st.name;$("songs").textContent=st.songs.toLocaleString()+" songs";
   $("lan").textContent=st.lan||"—";$("ts").textContent=st.tailscale||"off";$("pin").textContent=showPin?st.pin:"••••••";
-  const c=st.current;$("title").textContent=c?c.title:"Nothing playing";$("artist").textContent=c?c.artist+" · "+c.album:"";
+  const r=st.remote,own=st.current;remote=!!(r&&(!own||!st.state.isPlaying||!st.devices.length));
+  const c=remote?r:own;if(remote){st.state=Object.assign({},st.state,{isPlaying:r.isPlaying,position:r.position});st.hasArt=!!r.artID;c.id=r.artID}
+  $("from").textContent=remote?"Playing on "+r.from:(own?"Playing here":"");
+  $("title").textContent=c?c.title:"Nothing playing";$("artist").textContent=c?c.artist+" · "+c.album:"";
   if(c&&st.hasArt&&artId!==c.id){$("art").src="/local/art/"+c.id;artId=c.id}else if(!c||!st.hasArt){$("art").removeAttribute("src");artId=null}
   $("toggle").textContent=st.state.isPlaying?"Pause":"Play";
   $("devices").innerHTML=st.devices.length?st.devices.map(d=>'<div class="row"><span>'+esc(d.name)+'</span><span class="sub">'+esc(d.kind)+(d.id===st.state.activeDevice?" · speaker":"")+'</span></div>').join(""):"None connected";
-  $("speaker").textContent=st.devices.length?"":"This computer has no speaker of its own in Musiplex: open Musiplex on your phone and the sound plays there.";
+  $("speaker").textContent=st.devices.length||remote?"":"This computer has no speaker of its own in Musiplex: open Musiplex on your phone and the sound plays there.";
   $("fcount").textContent="("+st.floaterCount+")";$("fpath").textContent=st.floatersPath;
   $("floaters").innerHTML=st.floaters.map(n=>"<li>"+esc(n)+"</li>").join("")||'<li class="sub">Empty</li>';
   if(songs.length!==st.songs)loadSongs();tick()}
