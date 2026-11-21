@@ -57,7 +57,8 @@ WantedBy=default.target
 UNIT
 
 systemctl --user daemon-reload
-systemctl --user enable --now musiplex.service
+systemctl --user enable musiplex.service
+systemctl --user restart musiplex.service   # picks up a new version on re-install
 sleep 3
 systemctl --user --no-pager status musiplex.service | head -5 || true
 # Pin it to the KDE Plasma taskbar (skipped quietly on other desktops).
