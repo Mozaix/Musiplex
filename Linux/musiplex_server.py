@@ -624,7 +624,8 @@ class Server:
     async def dashboard(self, request):
         if not self.local(request):
             return web.Response(text="musiplex")
-        return web.Response(text=DASHBOARD, content_type="text/html")
+        return web.Response(text=DASHBOARD.replace("__VERSION__", DASHBOARD_VERSION), content_type="text/html",
+                            headers={"Cache-Control": "no-store"})
 
     async def local_status(self, request):
         if not self.local(request):
@@ -641,7 +642,8 @@ class Server:
             "current": {k: cur.get(k) for k in ("id", "title", "artist", "album", "duration")} if cur else None,
             "hasArt": bool(cur and (self.library.art_dir / f"{cur['id']}.jpg").exists()),
             "floatersPath": str(FLOATERS), "floaters": [p.name for p in floaters[:50]],
-            "floaterCount": len(floaters), "remote": self.remote_view()})
+            "floaterCount": len(floaters), "remote": self.remote_view(), "version": DASHBOARD_VERSION},
+            headers={"Cache-Control": "no-store"})
 
     def remote_view(self):
         r = self.remote
@@ -902,18 +904,18 @@ li:hover{background:var(--bg)}li span{color:var(--dim);white-space:nowrap;overfl
 <div class="hint">Drop songs in this folder: they show up on your phone in a few seconds, and on your Mac within a minute.</div></section>
 <section class="card"><h2>Songs</h2><input id="q" placeholder="Search songs or artists" autocomplete="off"><ul id="list"></ul></section>
 </main><script>
-let st=null,remote=false,songs=[],showPin=false,artId=null,base=0;
+const VERSION="__VERSION__";let st=null,remote=false,shown=null,songs=[],showPin=false,artId=null,base=0;
 const $=id=>document.getElementById(id);
 const fmt=s=>{s=Math.max(0,Math.floor(s||0));return Math.floor(s/60)+":"+String(s%60).padStart(2,"0")};
 const esc=t=>String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 async function cmd(action,extra){const body=Object.assign({action},extra||{});if(remote)body.target="remote";
   await fetch("/local/cmd",{method:"POST",headers:{"Content-Type":"application/json","X-Musiplex":"1"},body:JSON.stringify(body)});setTimeout(poll,remote?2500:0)}
 async function poll(){
-  try{const r=await fetch("/local/status");st=await r.json();base=performance.now();$("dot").className="dot"}catch(e){$("dot").className="dot off";$("songs").textContent="server not running";return}
+  try{const r=await fetch("/local/status");st=await r.json();if(st.version&&st.version!==VERSION){location.reload();return}base=performance.now();$("dot").className="dot"}catch(e){$("dot").className="dot off";$("songs").textContent="server not running";return}
   $("name").textContent=st.name;$("songs").textContent=st.songs.toLocaleString()+" songs";
   $("lan").textContent=st.lan||"—";$("ts").textContent=st.tailscale||"off";$("pin").textContent=showPin?st.pin:"••••••";
   const r=st.remote,own=st.current;remote=!!(r&&(!own||!st.state.isPlaying||!st.devices.length));
-  const c=remote?r:own;if(remote){st.state=Object.assign({},st.state,{isPlaying:r.isPlaying,position:r.position});st.hasArt=!!r.artID;c.id=r.artID}
+  const c=remote?r:own;shown=c;if(remote){st.state=Object.assign({},st.state,{isPlaying:r.isPlaying,position:r.position});st.hasArt=!!r.artID;c.id=r.artID}
   $("from").textContent=remote?"Playing on "+r.from:(own?"Playing here":"");
   $("title").textContent=c?c.title:"Nothing playing";$("artist").textContent=c?c.artist+" · "+c.album:"";
   if(c&&st.hasArt&&artId!==c.id){$("art").src="/local/art/"+c.id;artId=c.id}else if(!c||!st.hasArt){$("art").removeAttribute("src");artId=null}
@@ -923,7 +925,7 @@ async function poll(){
   $("fcount").textContent="("+st.floaterCount+")";$("fpath").textContent=st.floatersPath;
   $("floaters").innerHTML=st.floaters.map(n=>"<li>"+esc(n)+"</li>").join("")||'<li class="sub">Empty</li>';
   if(songs.length!==st.songs)loadSongs();tick()}
-function tick(){if(!st||!st.current)return;const d=st.current.duration||0;let p=st.state.position+(st.state.isPlaying?(performance.now()-base)/1000:0);p=Math.min(p,d);
+function tick(){if(!st||!shown){$("pos").textContent=$("dur").textContent="";$("prog").style.width="0";return}const d=shown.duration||0;let p=st.state.position+(st.state.isPlaying?(performance.now()-base)/1000:0);p=Math.min(p,d);
   $("pos").textContent=fmt(p);$("dur").textContent=fmt(d);$("prog").style.width=(d?p/d*100:0)+"%"}
 async function loadSongs(){songs=await (await fetch("/local/songs")).json();render()}
 function render(){const q=$("q").value.trim().toLowerCase();const hits=(q?songs.filter(s=>(s[1]+" "+s[2]).toLowerCase().includes(q)):songs).slice(0,200);
@@ -933,6 +935,8 @@ $("list").onclick=e=>{const li=e.target.closest("li");if(!li)return;const q=$("q
 $("q").oninput=render;$("reveal").onclick=e=>{e.preventDefault();showPin=!showPin;$("reveal").textContent=showPin?"Hide PIN":"Show PIN";poll()};
 poll();setInterval(()=>{if(!document.hidden)poll()},3000);setInterval(tick,500);
 </script></body></html>"""
+
+DASHBOARD_VERSION = hashlib.sha256(DASHBOARD.encode()).hexdigest()[:12]
 
 
 def main():
