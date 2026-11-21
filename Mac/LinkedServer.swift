@@ -10,6 +10,8 @@ import Observation
 /// While linked, this Mac also tells the server what it's playing (every 2 s
 /// while playing, 6 s when paused, and right away on a change), so the server's
 /// window shows this Mac's song. Buttons pressed there come back in the reply.
+/// The report also carries this Mac's key: a phone that connects to the server
+/// is then passed straight through to this Mac (one shared session, a chain).
 @MainActor @Observable
 final class LinkedServer {
     private(set) var name = UserDefaults.standard.string(forKey: "linkedName")
@@ -28,6 +30,8 @@ final class LinkedServer {
     @ObservationIgnored var nowPlaying: () -> [String: Any]? = { nil }
     /// A button pressed in the server's window: ["action": "toggle" | "next" | "prev" | "surprise" | "play", ...].
     @ObservationIgnored var onCommand: ([String: Any]) -> Void = { _ in }
+    /// This Mac's own key, shared with the linked server so it can chain your phones to this Mac.
+    @ObservationIgnored var chainToken: () -> String? = { nil }
     @ObservationIgnored private var liveTask: Task<Void, Never>?
     @ObservationIgnored private var liveHost: String?
     @ObservationIgnored private var wake: CheckedContinuation<Void, Never>?
@@ -86,8 +90,14 @@ final class LinkedServer {
     private func pushNowPlaying() async -> Bool {
         guard let token else { return false }
         let info = nowPlaying()
-        let body = (try? JSONSerialization.data(withJSONObject: ["name": Host.current().localizedName ?? "Mac",
-                                                                  "track": info.map { $0 as Any } ?? NSNull()])) ?? Data()
+        var payload: [String: Any] = ["name": Host.current().localizedName ?? "Mac",
+                                      "track": info.map { $0 as Any } ?? NSNull()]
+        // Lets the server pass phones that connect to it straight through to this Mac,
+        // so everything shares one session while this Mac is on.
+        if let leader = chainToken() {
+            payload["leader"] = ["token": leader, "http": Net.httpPort, "ws": Net.wsPort]
+        }
+        let body = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
         for host in [liveHost].compactMap({ $0 }) + hosts.filter({ $0 != liveHost }) {
             guard let url = URL(string: "http://\(host):\(Net.httpPort)/linked/nowplaying?t=\(token)") else { continue }
             var request = URLRequest(url: url)

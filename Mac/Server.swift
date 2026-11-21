@@ -43,6 +43,9 @@ final class Server {
     /// Every device that can be picked as the speaker, this Mac first.
     var devices: [DeviceInfo] { [DeviceInfo(id: "mac", name: macName, kind: "mac")] + phones.map(\.info) }
 
+    /// The key a linked server (the laptop) uses to pass your phones through to this Mac.
+    var chainToken: String { token }
+
     func name(of deviceID: String) -> String {
         devices.first { $0.id == deviceID }?.name ?? "another device"
     }

@@ -95,6 +95,7 @@ final class AppModel {
             return ["title": t.title, "artist": t.artist, "album": t.album, "duration": t.duration,
                     "position": self.session.livePosition, "isPlaying": self.session.state.isPlaying]
         }
+        linked.chainToken = { [server] in server.chainToken }
         linked.onCommand = { [weak self] c in
             guard let self, let action = c["action"] as? String else { return }
             switch action {

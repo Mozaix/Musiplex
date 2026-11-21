@@ -35,7 +35,7 @@ import unicodedata
 import uuid
 from pathlib import Path
 
-from aiohttp import WSMsgType, web
+from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
 
 try:
     import mutagen
@@ -502,6 +502,13 @@ class Server:
         self.pin_failures = 0
         self.remote: dict | None = None        # what a linked Mac is playing (for the window)
         self.remote_commands: list[dict] = []  # buttons pressed for it, sent back in its next report
+        # The chain: while a linked Mac is on, phones that connect here are passed
+        # straight through to it (one shared session). Its key is kept so phones
+        # that got it from the Mac still get in here when the Mac is off.
+        self.cfg_file, self.cfg = cfg_file, cfg
+        self.leader: dict | None = cfg.get("leader")
+        self.leader_at = 0.0
+        self.client: ClientSession | None = None
 
     # ---- helpers
 
@@ -530,8 +537,34 @@ class Server:
     def devices(self):
         return [{"id": c["deviceID"], "name": c["name"], "kind": c["kind"]} for c in self.phones()]
 
+    def known_token(self, t) -> bool:
+        return bool(t) and (t == self.token or (self.leader is not None and t == self.leader.get("token")))
+
     def authorized(self, request) -> bool:
-        return request.query.get("t") == self.token
+        return self.known_token(request.query.get("t"))
+
+    def leader_live(self) -> bool:
+        """The linked Mac reported in the last 20 s (it does every 2-6 s while it's on)."""
+        return self.leader is not None and now() - self.leader_at < 20
+
+    def for_leader(self, request) -> bool:
+        return self.leader_live() and request.query.get("t") == self.leader["token"]
+
+    async def proxy(self, request):
+        """Passes a phone's request through to the linked Mac (catalog, art, songs with Range)."""
+        url = f"http://{self.leader['host']}:{self.leader['http']}{request.path_qs}"
+        headers = {k: v for k, v in request.headers.items() if k.lower() in ("range", "if-range")}
+        try:
+            async with self.client.get(url, headers=headers) as r:
+                keep = ("content-type", "content-length", "content-range", "accept-ranges", "last-modified", "etag")
+                resp = web.StreamResponse(status=r.status, headers={k: v for k, v in r.headers.items() if k.lower() in keep})
+                await resp.prepare(request)
+                async for chunk in r.content.iter_chunked(1 << 16):
+                    await resp.write(chunk)
+                await resp.write_eof()
+                return resp
+        except (ClientError, asyncio.TimeoutError, ConnectionResetError):
+            return web.Response(status=502)
 
     async def send(self, ws, msg: dict):
         try:
@@ -561,11 +594,15 @@ class Server:
     async def catalog(self, request):
         if not self.authorized(request):
             return web.Response(status=401)
+        if self.for_leader(request):
+            return await self.proxy(request)
         return web.Response(body=self.catalog_bytes(), content_type="application/json")
 
     async def art(self, request):
         if not self.authorized(request):
             return web.Response(status=401)
+        if self.for_leader(request):
+            return await self.proxy(request)
         tid = "".join(ch for ch in request.match_info["id"] if ch in "0123456789abcdef")
         path = self.library.art_dir / f"{tid}.jpg"
         if not path.exists():
@@ -575,6 +612,8 @@ class Server:
     async def file(self, request):
         if not self.authorized(request):
             return web.Response(status=401)
+        if self.for_leader(request):
+            return await self.proxy(request)
         tid = request.match_info["name"].split(".")[0]
         path = self.library.paths.get(tid)
         if not path or not os.path.exists(path):
@@ -668,6 +707,15 @@ class Server:
             return web.Response(status=400)
         track = body.get("track") if isinstance(body.get("track"), dict) else None
         self.remote = {"name": str(body.get("name") or "Mac")[:80], "track": track, "at": now()}
+        lead = body.get("leader")
+        if isinstance(lead, dict) and isinstance(lead.get("token"), str) and lead["token"]:
+            leader = {"token": lead["token"], "host": request.remote,
+                      "http": int(lead.get("http") or 7860), "ws": int(lead.get("ws") or 7861)}
+            if leader != self.leader:
+                self.leader = leader
+                self.cfg["leader"] = leader
+                Library._save(self.cfg_file, self.cfg)
+            self.leader_at = now()
         commands, self.remote_commands = self.remote_commands, []
         return web.json_response({"commands": commands})
 
@@ -709,6 +757,15 @@ class Server:
     async def socket(self, request):
         ws = web.WebSocketResponse(heartbeat=30, max_msg_size=8 << 20)
         await ws.prepare(request)
+        if self.leader_live():
+            try:
+                up = await self.client.ws_connect(f"ws://{self.leader['host']}:{self.leader['ws']}/",
+                                                  heartbeat=30, max_msg_size=8 << 20, timeout=ClientTimeout(total=4))
+            except (ClientError, asyncio.TimeoutError, OSError):
+                up = None
+            if up is not None:
+                await self.relay(ws, up)
+                return ws
         self.clients[ws] = {"authed": False, "deviceID": "", "name": "iPhone", "kind": "iphone"}
         try:
             async for msg in ws:
@@ -724,6 +781,41 @@ class Server:
             if client and client["authed"]:
                 self.device_left(client)
         return ws
+
+    async def relay(self, ws, up):
+        """Chain: this phone talks to the linked Mac through here. Its hello is let in with
+        this server's PIN or key (or the Mac's), and passed on with the Mac's key."""
+        async def from_phone():
+            async for msg in ws:
+                if msg.type != WSMsgType.TEXT:
+                    continue
+                data = msg.data
+                try:
+                    m = json.loads(data)
+                except ValueError:
+                    continue
+                if m.get("type") == "hello":
+                    if not (self.known_token(m.get("token")) or m.get("pin") == self.pin):
+                        await self.send(ws, {"type": "denied"})
+                        return
+                    m["token"] = self.leader["token"]
+                    m.pop("pin", None)
+                    data = json.dumps(m)
+                await up.send_str(data)
+
+        async def from_mac():
+            async for msg in up:
+                if msg.type == WSMsgType.TEXT:
+                    await ws.send_str(msg.data)
+
+        tasks = [asyncio.ensure_future(from_phone()), asyncio.ensure_future(from_mac())]
+        try:
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for t in tasks:
+                t.cancel()
+            await up.close()
+            await ws.close()
 
     def device_left(self, client):
         self.broadcast({"type": "devices", "devices": self.devices()})
@@ -742,7 +834,7 @@ class Server:
             return
         kind = m.get("type")
         if kind == "hello":
-            if m.get("token") != self.token and m.get("pin") != self.pin:
+            if not self.known_token(m.get("token")) and m.get("pin") != self.pin:
                 await self.send(ws, {"type": "denied"})
                 return
             device = m.get("deviceID") or str(uuid.uuid4())
@@ -822,6 +914,7 @@ class Server:
         return zc
 
     async def run(self):
+        self.client = ClientSession(timeout=ClientTimeout(total=None, connect=4, sock_read=30))
         http = web.Application(client_max_size=1 << 20)
         http.router.add_get("/ping", self.ping)
         http.router.add_get("/catalog", self.catalog)

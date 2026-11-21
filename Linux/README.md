@@ -34,3 +34,11 @@ sudo loginctl enable-linger $USER
 
 Right-click the taskbar icon for **Restart server** or **Open Floaters folder**. The window only
 works from the laptop itself: other computers on the network can't open it.
+
+## Chain: one session across the Mac, the laptop and your phone
+
+Once the Mac is linked (Settings → Linked Server), it checks in with the laptop every few seconds.
+While it does, any phone that connects to the laptop is passed straight through to the Mac: same
+queue, same speaker choice, same songs, as if it had connected to the Mac directly. The laptop
+window shows and controls the Mac's song. When the Mac is off or asleep, the laptop runs its own
+session again and the same phones still get in (no re-pairing).
