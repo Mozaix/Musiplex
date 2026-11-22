@@ -518,6 +518,7 @@ final class LibraryStore {
     /// Adds songs to the end of one of your playlists, skipping ones already in it.
     func add(_ ids: [String], toPlaylist id: String, source: String = "This Mac") {
         guard let i = userPlaylists.firstIndex(where: { $0.id == id }) else { return }
+        putOnTop(id)   // the playlist you just added to goes to the top
         var existing = Set(userPlaylists[i].trackIDs.map { hidden[$0] ?? $0 })
         var added: [String] = []
         for id in ids.map({ hidden[$0] ?? $0 }) where existing.insert(id).inserted {
@@ -565,7 +566,7 @@ final class LibraryStore {
     @ObservationIgnored var onPlaylistsEdited: (([String]) -> Void)?
 
     // MARK: Playlist order
-    // Newest playlists go to the top; drag to rearrange. The order is saved
+    // Newest playlists, and ones you just played or added to, go to the top; drag to rearrange. The order is saved
     // and shared with your devices.
 
     @ObservationIgnored private var order: [String] = UserDefaults.standard.stringArray(forKey: "playlistOrder") ?? []

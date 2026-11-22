@@ -173,7 +173,6 @@ struct Sidebar: View {
             }
 
             Spacer(minLength: 0)
-            DevicesCard()
         }
         .padding(10)
         .frame(width: 236)

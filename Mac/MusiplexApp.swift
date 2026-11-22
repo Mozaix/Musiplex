@@ -46,6 +46,7 @@ final class AppModel {
     let browser = Browser()
     /// A Linux (or other) Musiplex server whose Floaters are copied here.
     let linked = LinkedServer()
+    let spotify = SpotifyLink()
     @ObservationIgnored private(set) var recorder: ListeningRecorder!
     @ObservationIgnored private var guessHour = -1
     @ObservationIgnored private var guessTimer: Timer?
@@ -75,6 +76,7 @@ final class AppModel {
         session.onApplied = { [weak self] in
             self?.notch?.refresh()
             self?.listened()
+            self?.playlistPlayed()
             self?.linked.playbackChanged("\(session.state.currentID ?? "")|\(session.state.isPlaying)")
             bridge.update(track: library.track(session.state.currentID),
                           position: session.livePosition, playing: session.state.isPlaying)
@@ -155,6 +157,60 @@ final class AppModel {
 
     func send(_ action: String, value: Double? = nil, text: String? = nil) {
         session.perform(Command(action: action, value: value, text: text))
+    }
+
+    @ObservationIgnored private var lastQueue: [String] = []
+
+    /// A playlist you start playing (here or from a phone) moves to the top.
+    private func playlistPlayed() {
+        let queue = session.state.queue
+        guard queue != lastQueue else { return }
+        lastQueue = queue
+        guard queue.count > 1 else { return }
+        let set = Set(queue)
+        if let list = library.playlists.first(where: { $0.tracks.count == set.count && Set($0.tracks.map(\.id)) == set }),
+           library.playlists.first?.id != list.id {
+            library.movePlaylist(list.id, before: library.playlists.first?.id)
+        }
+    }
+
+    // MARK: Genre playlists
+
+    /// Your songs in a genre (as grouped in Your Taste).
+    func tracks(inGenre genre: String) -> [Track] {
+        let map = recommender.genres(library.tracks)
+        return library.tracks.filter { map[$0.id] == genre }
+    }
+
+    /// A Musiplex playlist of your songs in this genre (topped up if it already exists).
+    func makeGenrePlaylist(_ genre: String) {
+        let ids = tracks(inGenre: genre).map(\.id)
+        guard !ids.isEmpty else { return }
+        if let existing = library.playlists.first(where: { $0.editable && $0.name == genre }) {
+            library.add(ids, toPlaylist: existing.id)
+        } else {
+            library.createPlaylist(named: genre, with: ids)
+        }
+    }
+
+    /// New songs in this genre on Spotify (not ones you have), in their own Spotify playlist.
+    func makeSpotifyPlaylist(_ genre: String) {
+        let mine = tracks(inGenre: genre)
+        // Search with the genres your songs actually carry first ("Indie Pop", "Alternative"…).
+        var counts: [String: Int] = [:]
+        for t in mine { if let g = t.genre { counts[g, default: 0] += 1 } }
+        var terms = counts.sorted { $0.value > $1.value }.prefix(3).flatMap { Self.spotifyTerms($0.key) }
+        terms += Self.spotifyTerms(genre)
+        terms = terms.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+        let have = Set(library.tracks.map { songKey(title: $0.title, artist: $0.artist) })
+        Task { await spotify.makePlaylist(genre: genre, searchTerms: terms, have: have) }
+    }
+
+    /// "Hip-Hop/Rap" → ["hip hop", "rap"]; "R&B/Soul" → ["r&b", "soul"].
+    static func spotifyTerms(_ genre: String) -> [String] {
+        genre.lowercased().split(separator: "/").map {
+            $0.replacingOccurrences(of: "-", with: " ").trimmingCharacters(in: .whitespaces)
+        }.filter { !$0.isEmpty && $0 != "score" }
     }
 
     // MARK: Playlists

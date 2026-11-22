@@ -8,7 +8,9 @@ struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             Text("Settings").font(.system(size: 26, weight: .bold))
+            SettingsCard(title: "Server", symbol: "antenna.radiowaves.left.and.right") { DevicesCard() }
             TasteCard()
+            SpotifyCard()
             FloatingCard()
             LinkedServerCard()
             AppleMusicCard()
@@ -251,8 +253,14 @@ struct TasteCard: View {
                             .frame(height: 8)
                             Text("\(Int((item.share * 100).rounded()))%").font(.caption.monospacedDigit()).foregroundStyle(Theme.dim)
                                 .frame(width: 40, alignment: .trailing)
+                            GenreActions(genre: item.genre)
+                        }
+                        if let result = model.spotify.results[item.genre] {
+                            Text(result).font(.caption).foregroundStyle(Theme.dim).padding(.leading, 160)
                         }
                     }
+                    Text("Use the buttons next to a genre to make a playlist of your songs in it, or one of new songs like them on Spotify.")
+                        .font(.caption).foregroundStyle(Theme.dim)
                 }
                 Text("Learned from \(model.recommender.playedCount) songs you've played. Everything stays on your devices.")
                     .font(.caption).foregroundStyle(Theme.dim)
@@ -267,6 +275,74 @@ struct TasteCard: View {
                         .font(.caption).foregroundStyle(Theme.dim)
                     TrackList(tracks: suggestions)
                 }
+            }
+        }
+    }
+}
+
+/// Make a playlist from a genre: your own songs here, or new ones on Spotify.
+private struct GenreActions: View {
+    @Environment(AppModel.self) private var model
+    let genre: String
+
+    var body: some View {
+        let spotify = model.spotify
+        HStack(spacing: 6) {
+            Button { model.makeGenrePlaylist(genre) } label: { Image(systemName: "text.badge.plus") }
+                .help("Make a Musiplex playlist of your \(genre) songs")
+            if spotify.working == genre {
+                ProgressView().controlSize(.small).frame(width: 24)
+            } else {
+                Button { model.makeSpotifyPlaylist(genre) } label: { Image(systemName: "sparkle.magnifyingglass") }
+                    .disabled(!spotify.connected || spotify.working != nil)
+                    .help(spotify.connected ? "Add new \(genre) songs like yours to a Spotify playlist"
+                                            : "Connect Spotify below to make Spotify playlists")
+            }
+            if let url = spotify.playlistURL(for: genre) {
+                Button { NSWorkspace.shared.open(url) } label: { Image(systemName: "arrow.up.right.square") }
+                    .help("Open the Spotify playlist")
+            }
+        }
+        .buttonStyle(.borderless)
+    }
+}
+
+/// Connects your own Spotify developer app (needed for Spotify playlists).
+struct SpotifyCard: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var spotify = model.spotify
+        SettingsCard(title: "Spotify", symbol: "music.note.house") {
+            VStack(alignment: .leading, spacing: 10) {
+                if spotify.connected {
+                    HStack {
+                        Label("Connected", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                        Spacer()
+                        Button("Disconnect") { spotify.disconnect() }
+                    }
+                    Text("In Your Taste, the sparkle button next to a genre adds about 30 new songs in that genre (none you already have) to a private Spotify playlist called “Musiplex · Genre”. Press it again to add more.")
+                        .font(.caption).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("""
+                    Spotify only lets apps make playlists through a developer app of your own. One-time setup:
+                    1. Go to developer.spotify.com/dashboard and create an app (any name). This needs Spotify Premium.
+                    2. Add the redirect URI \(SpotifyLink.redirect) and tick Web API.
+                    3. Copy its Client ID here, then press Connect and sign in in your browser.
+                    """)
+                    .font(.caption).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    HStack {
+                        TextField("Client ID", text: $spotify.clientID).textFieldStyle(.roundedBorder).frame(maxWidth: 320)
+                        Button("Connect") { spotify.connect() }.disabled(spotify.clientID.trimmingCharacters(in: .whitespaces).isEmpty)
+                        Button("Open Dashboard") { NSWorkspace.shared.open(URL(string: "https://developer.spotify.com/dashboard")!) }
+                    }
+                }
+                if !spotify.status.isEmpty {
+                    Text(spotify.status).font(.caption).foregroundStyle(Theme.dim)
+                }
+                Text("Only genre searches and the playlists you make are sent to Spotify. The sign-in is kept in your Keychain.")
+                    .font(.caption2).foregroundStyle(Theme.dim)
             }
         }
     }
