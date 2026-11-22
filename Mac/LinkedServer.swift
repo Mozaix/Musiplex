@@ -70,6 +70,22 @@ final class LinkedServer {
         return nil
     }
 
+    /// POST JSON to a path on the linked server with its key.
+    func post(_ path: String, _ body: [String: Any]) async -> Data? {
+        guard let token, let payload = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        for host in hosts {
+            guard let url = URL(string: "http://\(host):\(Net.httpPort)/\(path)?t=\(token)") else { continue }
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = payload
+            guard let (data, response) = try? await session.data(for: request),
+                  (response as? HTTPURLResponse)?.statusCode == 200 else { continue }
+            return data
+        }
+        return nil
+    }
+
     @ObservationIgnored private var lastKey = ""
 
     /// Call when playback may have changed; tells the server at once if the song or play/pause did.

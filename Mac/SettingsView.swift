@@ -471,6 +471,7 @@ struct WorkloadCard: View {
     @Environment(AppModel.self) private var model
     @State private var link = ""
     @State private var info: [String: Any] = [:]
+    @State private var busy = false
 
     var body: some View {
         let linked = model.linked
@@ -483,35 +484,66 @@ struct WorkloadCard: View {
                 } else if linked.isLinked {
                     Label("Workload on this Mac syncs with \(linked.name ?? "your linked server"), no PIN needed.", systemImage: "checkmark.circle.fill")
                         .font(.callout)
-                    Text("Your tasks live on \(linked.name ?? "the linked server"), and it checks Toddle every 15 minutes. Set the Toddle link in its Musiplex window (Settings → Workload).")
+                    Text("Your tasks live on \(linked.name ?? "the linked server"), which checks Toddle every 15 minutes. The link you paste here is saved there.")
                         .font(.caption).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
                 } else {
                     Label("This Mac keeps your Workload tasks. Workload here connects by itself; phones pair with this Mac's PIN.", systemImage: "checkmark.circle.fill")
                         .font(.callout).fixedSize(horizontal: false, vertical: true)
-                    Text("Toddle: paste your calendar link (Toddle on the web → Calendar → Subscribe → Others). It's checked every 15 minutes and kept only on this Mac.")
-                        .font(.caption).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+                    Text("Toddle is checked every 15 minutes, and the link stays on this Mac.")
+                        .font(.caption).foregroundStyle(Theme.dim)
+                }
+                if WorkloadTasks.installed {
+                    Text("Toddle calendar link (Toddle on the web → Calendar → Subscribe → Others):").font(.caption).foregroundStyle(Theme.dim)
                     HStack {
-                        TextField(info["set"] as? Bool == true ? "Link saved: \(info["link"] as? String ?? "")" : "Toddle calendar link", text: $link)
+                        TextField(info["set"] as? Bool == true ? "Saved: \(info["link"] as? String ?? "")" : "Paste the link", text: $link)
                             .textFieldStyle(.roundedBorder)
-                        Button("Save") { TaskHub.shared.setToddle(link); link = ""; refresh(after: 3) }.disabled(link.isEmpty)
+                        Button("Save") { save(link) }.disabled(link.isEmpty || busy)
                         if info["set"] as? Bool == true {
-                            Button("Remove") { TaskHub.shared.setToddle(""); refresh() }
+                            Button("Remove") { save("") }.disabled(busy)
                         }
                     }
-                    if let status = info["status"] as? [String: Any], let checked = status["checked"] as? Double {
+                    if let error = info["error"] as? String {
+                        Text(error).font(.caption).foregroundStyle(.red)
+                    } else if let status = info["status"] as? [String: Any], let checked = status["checked"] as? Double {
                         Text(status["ok"] as? Bool == true
                              ? "Checked \(Date(timeIntervalSince1970: checked).formatted(date: .omitted, time: .shortened)): \(status["found"] as? Int ?? 0) upcoming deadlines, \(status["added"] as? Int ?? 0) new, \(status["removed"] as? Int ?? 0) removed."
                              : "Last check failed: \(status["error"] as? String ?? "") — is the link still valid?")
                             .font(.caption).foregroundStyle(Theme.dim)
+                    } else if info["set"] as? Bool == true {
+                        Text("Checking…").font(.caption).foregroundStyle(Theme.dim)
                     }
                 }
             }
         }
-        .onAppear { refresh() }
+        .task { await load() }
     }
 
-    private func refresh(after seconds: Double = 0) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { info = TaskHub.shared.toddleInfo() }
+    /// Where the link lives: the linked server (the hub) when linked, otherwise this Mac.
+    private func load() async {
+        if model.linked.isLinked {
+            if let data = await model.linked.get("toddle"),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { info = obj }
+            else { info = ["error": "Couldn't reach \(model.linked.name ?? "the linked server"). Is it on, and updated to Musiplex 2.4.1?"] }
+        } else {
+            info = TaskHub.shared.toddleInfo()
+        }
+    }
+
+    private func save(_ value: String) {
+        busy = true
+        Task {
+            if model.linked.isLinked {
+                if let data = await model.linked.post("toddle", ["url": value]),
+                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { info = obj }
+                else { info = ["error": "Couldn't save it on \(model.linked.name ?? "the linked server")."] }
+            } else {
+                TaskHub.shared.setToddle(value)
+            }
+            link = ""
+            try? await Task.sleep(for: .seconds(4))
+            await load()
+            busy = false
+        }
     }
 }
 

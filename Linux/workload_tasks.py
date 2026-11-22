@@ -345,6 +345,30 @@ def install(router, server, config_dir: Path) -> TaskStore:
     toddle = Toddle(store, Path(config_dir))
     server.toddle = toddle
 
+    def toddle_reply():
+        url = (toddle.cfg.get("urls") or [""])[0]
+        return web.json_response({"set": bool(url), "link": (url[:28] + "…") if len(url) > 30 else url,
+                                  "status": toddle.status, "every": TODDLE_EVERY})
+
+    async def set_toddle(request):
+        body = await request.json()
+        url = str(body.get("url") or "").strip()
+        if url and not url.startswith(("https://", "http://", "webcal://")):
+            return web.json_response({"error": "That doesn't look like a calendar link."}, status=400)
+        toddle.cfg["urls"] = [url] if url else []
+        toddle.save()
+        if toddle.wake:
+            toddle.wake.set()     # check now
+        return toddle_reply()
+
+    async def remote_toddle(request):
+        """The same setting from a linked Musiplex (a Mac linked to this hub), with this server's key."""
+        if not server.authorized(request):
+            return web.Response(status=401)
+        if request.method == "POST":
+            return await set_toddle(request)
+        return toddle_reply()
+
     async def local_toddle(request):
         """Musiplex Settings: the Toddle link (shown masked) and when it was last checked."""
         if request.method == "POST":
@@ -372,6 +396,7 @@ def install(router, server, config_dir: Path) -> TaskStore:
                                   "name": server.name, "via": "local", "toddle": bool(toddle.cfg.get("urls"))})
 
     router.add_route("*", "/local/toddle", local_toddle)
+    router.add_route("*", "/toddle", remote_toddle)
     router.add_get("/local/workload", local_workload)
     router.add_get("/tasks", get_tasks)
     router.add_post("/tasks", post_tasks)
