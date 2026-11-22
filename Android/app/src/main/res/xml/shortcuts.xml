@@ -1,0 +1,16 @@
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="surprise" android:enabled="true" android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/sc_surprise" android:shortcutLongLabel="@string/sc_surprise_long">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="com.musiplex.android"
+            android:targetClass="com.musiplex.android.MainActivity">
+            <extra android:name="action" android:value="surprise"/>
+        </intent>
+    </shortcut>
+    <shortcut android:shortcutId="continue" android:enabled="true" android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/sc_continue" android:shortcutLongLabel="@string/sc_continue_long">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="com.musiplex.android"
+            android:targetClass="com.musiplex.android.MainActivity">
+            <extra android:name="action" android:value="continue"/>
+        </intent>
+    </shortcut>
+</shortcuts>

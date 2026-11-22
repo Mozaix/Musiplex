@@ -54,6 +54,91 @@ CONFIG = (Path(os.environ.get("APPDATA", Path.home())) / "Musiplex" if WINDOWS
           else Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "musiplex")
 HOME = Path.home()
 FLOATERS = Path(os.environ.get("MUSIPLEX_FLOATERS", HOME / "Documents" / "Songs" / "Floaters"))
+FILEBOX = Path(os.environ.get("MUSIPLEX_FILEBOX", HOME / "Documents" / "Musiplex File Box"))
+# Device kinds that are windows of this computer showing the player (mini player, notch):
+# they control playback but aren't speakers, so they're left out of the device list.
+PANEL_KINDS = {"panel", "server"}
+
+
+def client_page() -> Path | None:
+    """The app's player page (Client/musiplex.html): next to this file, in the repo, or in the .exe."""
+    import sys
+    here = Path(__file__).resolve().parent
+    for p in (Path(getattr(sys, "_MEIPASS", here)) / "musiplex.html", here / "musiplex.html",
+              here.parent / "Client" / "musiplex.html"):
+        if p.is_file():
+            return p
+    return None
+
+
+# Apple's genre IDs for the public top-songs charts (Discover).
+CHART_GENRES = {"pop": 14, "rock": 21, "hip-hop/rap": 18, "hip hop": 18, "rap": 18, "r&b/soul": 15, "r&b": 15,
+                "soul": 15, "alternative": 20, "indie": 20, "dance": 17, "electronic": 7, "country": 6,
+                "jazz": 11, "classical": 5, "latin": 12, "reggae": 24, "metal": 1153, "hard rock": 1152,
+                "blues": 2, "folk": 10, "singer/songwriter": 10, "k-pop": 51, "soundtrack": 16, "christian": 22,
+                "gospel": 22, "afrobeats": 1232, "house": 1050, "techno": 1050}
+
+
+class Stats:
+    """What you listen to, kept on this computer: plays and skips per song, the hours you
+    play it, weekday vs weekend, and which songs you play after which. Powers Surprise,
+    Guess and Your Taste (like the Mac, in a few KB)."""
+
+    def __init__(self):
+        self.file = CONFIG / "stats.json"
+        data = Library._load(self.file, {})
+        self.songs: dict[str, dict] = data.get("songs", {}) if isinstance(data, dict) else {}
+        self.follows: dict[str, dict[str, int]] = data.get("follows", {}) if isinstance(data, dict) else {}
+        self.dirty = False
+
+    def _song(self, tid):
+        return self.songs.setdefault(tid, {"p": 0, "s": 0, "h": [0] * 24, "w": [0, 0]})
+
+    def played(self, tid, before=None):
+        s = self._song(tid)
+        t = time.localtime()
+        s["p"] += 1
+        s["h"][t.tm_hour] += 1
+        s["w"][1 if t.tm_wday >= 5 else 0] += 1
+        s["last"] = now()
+        if before and before != tid:
+            f = self.follows.setdefault(before, {})
+            f[tid] = f.get(tid, 0) + 1
+            if len(f) > 40:
+                for k, _ in sorted(f.items(), key=lambda kv: kv[1])[:10]:
+                    f.pop(k, None)
+        self.dirty = True
+
+    def skipped(self, tid):
+        self._song(tid)["s"] += 1
+        self.dirty = True
+
+    def save(self):
+        if self.dirty:
+            self.dirty = False
+            Library._save(self.file, {"songs": self.songs, "follows": self.follows})
+
+    def like(self, tid) -> float:
+        s = self.songs.get(tid)
+        return 0.5 if not s else (s["p"] + 1) / (s["p"] + s["s"] + 2)
+
+    def now_fit(self, tid) -> float:
+        """How much this song belongs to this hour and kind of day (0..1)."""
+        s = self.songs.get(tid)
+        if not s or not s["p"]:
+            return 0.0
+        t = time.localtime()
+        h = s["h"]
+        near = h[t.tm_hour] + 0.5 * (h[(t.tm_hour - 1) % 24] + h[(t.tm_hour + 1) % 24])
+        day = s["w"][1 if t.tm_wday >= 5 else 0] / max(1, sum(s["w"]))
+        return min(1.0, near / max(1, s["p"])) * (0.5 + 0.5 * day)
+
+
+def moment_name() -> str:
+    t = time.localtime()
+    part = ("morning" if 5 <= t.tm_hour < 12 else "afternoon" if t.tm_hour < 17 else
+            "evening" if t.tm_hour < 22 else "night")
+    return time.strftime("%A ").lower() + part
 
 
 def song_key(title: str, artist: str) -> str:
@@ -207,9 +292,14 @@ class Library:
     def _install(self):
         tracks = []
         self.paths = {}
+        floaters = str(FLOATERS)
         for path, entry in self.entries.items():
             t = entry["track"]
             self.paths[t["id"]] = path
+            if path.startswith(floaters):
+                t["floater"] = True
+            else:
+                t.pop("floater", None)
             tracks.append(t)
         tracks.sort(key=lambda t: t["title"].lower())
         self.tracks = tracks
@@ -315,9 +405,11 @@ class Session:
     """The shared playback session. Authoritative here; devices follow it.
     Time is kept by the clock (this server has no audio output)."""
 
-    def __init__(self, library: Library, on_change):
+    def __init__(self, library: Library, on_change, stats: Stats | None = None):
         self.lib = library
         self.on_change = on_change
+        self.stats = stats or Stats()
+        self.last_played: str | None = None
         self.state = {"queue": [], "index": 0, "isPlaying": False, "position": 0.0, "activeDevice": "",
                       "volume": 0.8, "shuffle": False, "repeatMode": "off", "crossfade": 0.0, "fade": 0.0}
         self.anchor_pos = 0.0
@@ -382,6 +474,7 @@ class Session:
                 return
             s["isPlaying"] = True
         elif action in ("next", "auto"):
+            self._listened(self.current(), pos, finished=action == "auto")
             self._advance(auto=action == "auto")
             if action == "auto":
                 s["fade"] = s["crossfade"]
@@ -452,19 +545,57 @@ class Session:
             if auto and s["repeatMode"] == "off":
                 s["isPlaying"] = False
 
+    def _listened(self, tid, pos, finished):
+        """A play (heard to the end, or past half) or a skip (left early), for Surprise and Guess."""
+        t = self.lib.by_id.get(tid or "")
+        if not t:
+            return
+        d = t.get("duration") or 0
+        if finished or (d and pos >= d * 0.5):
+            self.stats.played(tid, self.last_played)
+            self.last_played = tid
+        elif pos < 30 and (not d or pos < d * 0.4):
+            self.stats.skipped(tid)
+
     def pick(self):
-        """Surprise on the server: a song you haven't heard lately, leaning to the current genre/artist."""
+        """Surprise: songs you often play after this one, the same genre or artist, what you
+        like at this time of day, a little discovery, never something heard lately."""
         if not self.lib.tracks:
             return None
         cur = self.lib.by_id.get(self.current() or "")
         avoid = set(self.recent) | set(self.state["queue"][-30:])
         pool = [t for t in self.lib.tracks if t["id"] not in avoid] or self.lib.tracks
-        if cur:
-            close = [t for t in pool if t.get("genre") and t.get("genre") == cur.get("genre")] + \
-                    [t for t in pool if t["artist"] == cur["artist"]]
-            if close and random.random() < 0.6:
-                return random.choice(close)["id"]
-        return random.choice(pool)["id"]
+        if len(pool) > 600:
+            pool = random.sample(pool, 600)
+        st = self.stats
+        follows = st.follows.get(cur["id"], {}) if cur else {}
+        top = max(follows.values(), default=1)
+        weights = []
+        for t in pool:
+            w = 0.3 + st.like(t["id"]) + 1.5 * st.now_fit(t["id"])
+            if follows.get(t["id"]):
+                w += 3 * follows[t["id"]] / top
+            if cur and t.get("genre") and t.get("genre") == cur.get("genre"):
+                w += 1.0
+            if cur and t["artist"] == cur["artist"]:
+                w += 0.6
+            if t["id"] not in st.songs:
+                w += 0.25          # a little discovery
+            weights.append(w)
+        return random.choices(pool, weights=weights)[0]["id"]
+
+    def guess(self, size=25) -> list[str]:
+        """Guess: songs for this moment (hour and kind of day), from what you play then."""
+        st = self.stats
+        scored = sorted(((st.now_fit(t["id"]) * st.like(t["id"]), t["id"]) for t in self.lib.tracks), reverse=True)
+        ids = [i for score, i in scored if score > 0][:size]
+        if len(ids) < size:               # not much history yet: fill from your favourite genres
+            liked = sorted(self.lib.tracks, key=lambda t: -st.like(t["id"]))
+            genres = {t.get("genre") for t in liked[:50] if t.get("genre")}
+            extra = [t["id"] for t in self.lib.tracks if t["id"] not in ids and (not genres or t.get("genre") in genres)]
+            random.Random(time.strftime("%Y%m%d%H")).shuffle(extra)
+            ids += extra[:size - len(ids)]
+        return ids
 
     def _keep_surprise_going(self):
         s = self.state
@@ -502,10 +633,15 @@ class Server:
         self.token, self.pin, self.name = cfg["token"], cfg["pin"], cfg["name"]
         self.http_port = 7860 + args.port_offset
         self.ws_port = 7861 + args.port_offset
-        roots = [Path(p).expanduser() for p in (args.music or ["~/Music", "~/Documents/Songs"])]
+        self.default_folders = args.music or ["~/Music", "~/Documents/Songs"]
+        roots = self.music_roots(cfg.get("folders") or [])
         FLOATERS.mkdir(parents=True, exist_ok=True)
         self.library = Library(roots)
-        self.session = Session(self.library, self.state_changed)
+        self.stats = Stats()
+        self.session = Session(self.library, self.state_changed, self.stats)
+        self.ui_hook = None          # set by the Windows app: shows its windows (main, mini)
+        self.guess_cache: tuple[str, list[str]] | None = None
+        self.awake = False
         self.clients: dict[web.WebSocketResponse, dict] = {}
         self.seen_seqs: dict[str, list[int]] = {}
         self.pin_failures = 0
@@ -526,6 +662,13 @@ class Server:
         self.mac_keys: dict[str, str] = {}
 
     # ---- helpers
+
+    def music_roots(self, folders) -> list[Path]:
+        """Default folders, imported ones, and always Floaters (even with --music)."""
+        roots = [Path(p).expanduser() for p in list(self.default_folders) + list(folders)]
+        if not any(FLOATERS.resolve().is_relative_to(r.resolve()) for r in roots if r.exists()):
+            roots.append(FLOATERS)
+        return roots
 
     @staticmethod
     def addresses():
@@ -567,7 +710,8 @@ class Server:
         return next((ip for ip in self.addresses() if self.is_tailscale(ip)), None)
 
     def phones(self):
-        return [c for c in self.clients.values() if c["authed"]]
+        """Devices that can play the sound (not the mini player or notch windows)."""
+        return [c for c in self.clients.values() if c["authed"] and c.get("kind") not in PANEL_KINDS]
 
     def devices(self):
         return [{"id": c["deviceID"], "name": c["name"], "kind": c["kind"]} for c in self.phones()]
@@ -618,7 +762,11 @@ class Server:
         moment = time.strftime("%A ") + ("morning" if 5 <= time.localtime().tm_hour < 12 else
                                           "afternoon" if time.localtime().tm_hour < 17 else
                                           "evening" if time.localtime().tm_hour < 22 else "night")
-        extra = [{"id": "auto-surprise", "name": "Surprise", "subtitle": "auto", "trackIDs": []}]
+        moment = moment_name()
+        if not self.guess_cache or self.guess_cache[0] != moment + time.strftime("%H"):
+            self.guess_cache = (moment + time.strftime("%H"), self.session.guess())
+        extra = [{"id": "auto-surprise", "name": "Surprise", "subtitle": "auto", "trackIDs": []},
+                 {"id": "auto-guess", "name": "Guess", "subtitle": f"auto · {moment}", "trackIDs": self.guess_cache[1]}]
         return json.dumps(self.library.catalog(extra)).encode()
 
     # ---- HTTP
@@ -718,6 +866,234 @@ class Server:
             "floatersPath": str(FLOATERS), "floaters": [p.name for p in floaters[:50]],
             "floaterCount": len(floaters), "remote": self.remote_view(), "macLink": self.mac_ws is not None, "version": DASHBOARD_VERSION},
             headers={"Cache-Control": "no-store"})
+
+    # ---- the full app window and its panels (this computer only)
+
+    async def app_page(self, request):
+        page = client_page()
+        if page is None:
+            return web.Response(status=404, text="Musiplex app page is missing")
+        return web.FileResponse(page, headers={"Cache-Control": "no-store", "Content-Type": "text/html; charset=utf-8"})
+
+    async def local_token(self, request):
+        """The app window on this computer signs in without a PIN."""
+        if not self.local(request):
+            return web.Response(status=403)
+        return web.json_response({"token": self.token, "name": self.name, "computer": socket.gethostname(),
+                                  "windows": WINDOWS, "pin": self.pin, "lan": self.lan_ip(),
+                                  "tailscale": self.tailscale_ip(), "floatersPath": str(FLOATERS),
+                                  "fileboxPath": str(FILEBOX)},
+                                 headers={"Cache-Control": "no-store"})
+
+    async def local_ui(self, request):
+        if not self.local(request, write=True):
+            return web.Response(status=403)
+        what = (await request.json()).get("show", "main")
+        if self.ui_hook:
+            self.ui_hook(what)
+            return web.json_response({"ok": True})
+        return web.json_response({"ok": False})
+
+    async def local_folders(self, request):
+        """Music folders: the defaults plus ones you import."""
+        if request.method == "POST":
+            if not self.local(request, write=True):
+                return web.Response(status=403)
+            body = await request.json()
+            folders = list(self.cfg.get("folders") or [])
+            add, remove = body.get("add"), body.get("remove")
+            if isinstance(add, str) and add.strip():
+                path = str(Path(add.strip()).expanduser())
+                if not Path(path).is_dir():
+                    return web.json_response({"error": "That folder doesn't exist."}, status=400)
+                if path not in folders:
+                    folders.append(path)
+            if isinstance(remove, str):
+                folders = [f for f in folders if f != remove]
+            self.cfg["folders"] = folders
+            Library._save(self.cfg_file, self.cfg)
+            self.library.roots = self.music_roots(folders)
+            if await asyncio.get_running_loop().run_in_executor(None, self.library.scan):
+                self.broadcast({"type": "library"})
+        elif not self.local(request):
+            return web.Response(status=403)
+        return web.json_response({"defaults": [str(Path(p).expanduser()) for p in self.default_folders],
+                                  "folders": list(self.cfg.get("folders") or []), "songs": len(self.library.tracks)})
+
+    async def local_floating(self, request):
+        """Floaters you've already put in a playlist leave the Floating list."""
+        if not self.local(request, write=True):
+            return web.Response(status=403)
+        body = await request.json()
+        settled = set(self.cfg.get("settled") or [])
+        settled.update(i for i in body.get("settle") or [] if isinstance(i, str))
+        self.cfg["settled"] = sorted(settled)[-5000:]
+        Library._save(self.cfg_file, self.cfg)
+        return web.json_response({"settled": self.cfg["settled"]})
+
+    async def local_taste(self, request):
+        """Your Taste: your genres (by plays, else by how many songs) and unplayed songs that fit."""
+        if not self.local(request):
+            return web.Response(status=403)
+        counts: dict[str, list] = {}
+        for t in self.library.tracks:
+            g = (t.get("genre") or "").strip()
+            if not g:
+                continue
+            c = counts.setdefault(g, [0, 0])
+            c[0] += 1
+            c[1] += self.stats.songs.get(t["id"], {}).get("p", 0)
+        genres = sorted(({"name": g, "songs": c[0], "plays": c[1]} for g, c in counts.items()),
+                        key=lambda x: (-x["plays"], -x["songs"]))[:12]
+        top = {g["name"] for g in genres[:4]}
+        unplayed = [t["id"] for t in self.library.tracks if t.get("genre") in top and t["id"] not in self.stats.songs]
+        random.Random(time.strftime("%Y%m%d")).shuffle(unplayed)
+        settled = self.cfg.get("settled") or []
+        return web.json_response({"genres": genres, "suggested": unplayed[:20], "settled": settled,
+                                  "plays": sum(s["p"] for s in self.stats.songs.values())})
+
+    async def local_discover(self, request):
+        """New songs in a genre that aren't in your library, from Apple's free public search and
+        charts (only the genre and artist names are sent), with 30-second previews."""
+        if not self.local(request):
+            return web.Response(status=403)
+        genre = (request.query.get("genre") or "").strip()[:60]
+        if not genre:
+            return web.json_response([])
+        have = {song_key(t["title"], t["artist"]) for t in self.library.tracks}
+        artists: dict[str, int] = {}
+        for t in self.library.tracks:
+            if (t.get("genre") or "").lower() == genre.lower():
+                artists[t["artist"]] = artists.get(t["artist"], 0) + 1 + self.stats.songs.get(t["id"], {}).get("p", 0)
+        found, per_artist = [], {}
+
+        def add(title, artist, album, preview, art, url):
+            k = song_key(title, artist)
+            if not title or not artist or k in have or per_artist.get(artist.lower(), 0) >= 2:
+                return
+            have.add(k)
+            per_artist[artist.lower()] = per_artist.get(artist.lower(), 0) + 1
+            found.append({"title": title, "artist": artist, "album": album or "", "preview": preview or "",
+                          "art": (art or "").replace("100x100", "300x300"), "url": url or ""})
+
+        async def search(term, limit):
+            try:
+                async with self.client.get("https://itunes.apple.com/search",
+                                           params={"term": term, "media": "music", "entity": "song", "limit": str(limit)}) as r:
+                    data = json.loads(await r.text())
+                for x in data.get("results", []):
+                    add(x.get("trackName"), x.get("artistName"), x.get("collectionName"), x.get("previewUrl"),
+                        x.get("artworkUrl100"), x.get("trackViewUrl"))
+            except Exception:
+                pass
+
+        gid = CHART_GENRES.get(genre.lower())
+        if gid:
+            try:
+                async with self.client.get(f"https://itunes.apple.com/us/rss/topsongs/limit=50/genre={gid}/json") as r:
+                    data = json.loads(await r.text())
+                for e in data.get("feed", {}).get("entry", []):
+                    links = e.get("link") or []
+                    preview = next((l["attributes"]["href"] for l in links if isinstance(l, dict)
+                                    and l.get("attributes", {}).get("im:assetType") == "preview"), "")
+                    art = (e.get("im:image") or [{}])[-1].get("label", "")
+                    add(e.get("im:name", {}).get("label"), e.get("im:artist", {}).get("label"),
+                        e.get("im:collection", {}).get("im:name", {}).get("label"), preview, art,
+                        e.get("id", {}).get("label"))
+            except Exception:
+                pass
+        for artist, _ in sorted(artists.items(), key=lambda kv: -kv[1])[:4]:
+            await search(artist, 15)
+        if len(found) < 20:
+            await search(genre, 50)
+        random.shuffle(found)
+        return web.json_response(found[:40])
+
+    async def local_filebox(self, request):
+        """The notch's file box: files dropped on it are kept in Documents/Musiplex File Box
+        (music files go to Floaters, so they show up in Musiplex)."""
+        if request.method == "POST":
+            if not self.local(request, write=True):
+                return web.Response(status=403)
+            reader = await request.multipart()
+            saved = []
+            async for part in reader:
+                name = os.path.basename(part.filename or "")
+                if not name:
+                    continue
+                folder = FLOATERS if Path(name).suffix.lower() in AUDIO else FILEBOX
+                folder.mkdir(parents=True, exist_ok=True)
+                target = folder / name
+                stem, n = target.stem, 1
+                while target.exists():
+                    target = folder / f"{stem} ({n}){target.suffix}"
+                    n += 1
+                with open(target, "wb") as f:
+                    while chunk := await part.read_chunk(1 << 20):
+                        f.write(chunk)
+                saved.append(target.name)
+            return web.json_response({"saved": saved})
+        if request.method == "DELETE":
+            if not self.local(request, write=True):
+                return web.Response(status=403)
+            name = os.path.basename(request.query.get("name", ""))
+            if name and (FILEBOX / name).is_file():
+                (FILEBOX / name).unlink()
+            return web.json_response({"ok": True})
+        if not self.local(request):
+            return web.Response(status=403)
+        if request.query.get("name"):
+            path = FILEBOX / os.path.basename(request.query["name"])
+            return web.FileResponse(path) if path.is_file() else web.Response(status=404)
+        items = []
+        if FILEBOX.exists():
+            for p in sorted(FILEBOX.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+                if p.is_file() and not p.name.startswith("."):
+                    items.append({"name": p.name, "size": p.stat().st_size})
+        return web.json_response({"path": str(FILEBOX), "files": items})
+
+    async def local_open(self, request):
+        """Opens the Floaters or File Box folder in Explorer / the file manager."""
+        if not self.local(request, write=True):
+            return web.Response(status=403)
+        what = (await request.json()).get("what")
+        folder = {"floaters": FLOATERS, "filebox": FILEBOX}.get(what)
+        if folder is None:
+            return web.Response(status=400)
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            if WINDOWS:
+                os.startfile(str(folder))   # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except Exception:
+            return web.json_response({"ok": False})
+        return web.json_response({"ok": True})
+
+    async def local_battery(self, request):
+        """Battery for the notch: percent, and whether it's charging."""
+        if not self.local(request):
+            return web.Response(status=403)
+        out = {"percent": None, "charging": None, "plugged": None}
+        try:
+            if WINDOWS:
+                import ctypes
+
+                class Power(ctypes.Structure):
+                    _fields_ = [("ac", ctypes.c_byte), ("flag", ctypes.c_byte), ("percent", ctypes.c_byte),
+                                ("saver", ctypes.c_byte), ("life", ctypes.c_ulong), ("full", ctypes.c_ulong)]
+                p = Power()
+                if ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(p)) and p.percent != -1 and (p.flag & 128) == 0:
+                    out = {"percent": int(p.percent) & 0xFF, "charging": bool(p.flag & 8), "plugged": p.ac == 1}
+            else:
+                for b in sorted(Path("/sys/class/power_supply").glob("BAT*")):
+                    status = (b / "status").read_text().strip()
+                    out = {"percent": int((b / "capacity").read_text().strip()), "charging": status == "Charging",
+                           "plugged": status in ("Charging", "Full", "Not charging")}
+                    break
+        except Exception:
+            pass
+        return web.json_response(out)
 
     def remote_view(self):
         r = self.remote
@@ -946,10 +1322,10 @@ class Server:
                     asyncio.ensure_future(other.close())
             client.update(authed=True, deviceID=device, name=m.get("name") or "iPhone", kind=m.get("kind") or "iphone")
             s = self.session.state
-            if s["activeDevice"] not in {c["deviceID"] for c in self.phones()}:
+            if client["kind"] not in PANEL_KINDS and s["activeDevice"] not in {c["deviceID"] for c in self.phones()}:
                 s["activeDevice"] = device          # no speakers here: a device plays the sound
             hosts = [h for h in [self.tailscale_ip()] if h]
-            await self.send(ws, {"type": "welcome", "token": self.token, "name": self.name,
+            await self.send(ws, {"type": "welcome", "token": self.token, "name": self.name, "noSpeaker": True,
                                  "state": self.session.snapshot(), "devices": self.devices(), "hosts": hosts})
             self.broadcast({"type": "devices", "devices": self.devices()})
             return
@@ -988,10 +1364,22 @@ class Server:
     # ---- background jobs
 
     async def ticker(self):
+        n = 0
         while True:
             await asyncio.sleep(3)
-            if self.session.state["isPlaying"] and self.phones():
+            n += 1
+            playing = self.session.state["isPlaying"] and bool(self.phones())
+            if playing:
                 self.broadcast({"type": "tick", "position": self.session.position(), "isPlaying": True})
+            if n % 20 == 0:
+                self.stats.save()
+            if WINDOWS and playing != self.awake:   # don't let the PC sleep while music plays
+                self.awake = playing
+                try:
+                    import ctypes
+                    ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | (0x00000001 if playing else 0))
+                except Exception:
+                    pass
 
     async def rescanner(self):
         """Quick check every 20 s (only new/changed files are read), so new Floaters show up fast."""
@@ -1017,7 +1405,7 @@ class Server:
 
     async def run(self):
         self.client = ClientSession(timeout=ClientTimeout(total=None, connect=4, sock_read=30))
-        http = web.Application(client_max_size=1 << 20)
+        http = web.Application(client_max_size=1 << 30)   # file box uploads
         http.router.add_get("/ping", self.ping)
         http.router.add_get("/catalog", self.catalog)
         http.router.add_get("/art/{id}", self.art)
@@ -1031,6 +1419,16 @@ class Server:
         http.router.add_get("/local/songs", self.local_songs)
         http.router.add_get("/local/art/{id}", self.local_art)
         http.router.add_post("/local/cmd", self.local_cmd)
+        http.router.add_get("/app", self.app_page)
+        http.router.add_get("/local/token", self.local_token)
+        http.router.add_post("/local/ui", self.local_ui)
+        http.router.add_route("*", "/local/folders", self.local_folders)
+        http.router.add_post("/local/floating", self.local_floating)
+        http.router.add_get("/local/taste", self.local_taste)
+        http.router.add_get("/local/discover", self.local_discover)
+        http.router.add_route("*", "/local/filebox", self.local_filebox)
+        http.router.add_post("/local/open", self.local_open)
+        http.router.add_get("/local/battery", self.local_battery)
         http.router.add_post("/linked/nowplaying", self.linked_nowplaying)
         ws = web.Application()
         ws.router.add_get("/", self.socket)
@@ -1134,13 +1532,17 @@ poll();setInterval(()=>{if(!document.hidden)poll()},1000);setInterval(tick,500);
 DASHBOARD_VERSION = hashlib.sha256(DASHBOARD.encode()).hexdigest()[:12]
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description="Musiplex server for Linux and Windows")
     parser.add_argument("--music", action="append", help="music folder (repeatable); default ~/Music and ~/Documents/Songs")
     parser.add_argument("--name", help="name shown on your devices")
     parser.add_argument("--port-offset", type=int, default=int(os.environ.get("MUSIPLEX_PORT_OFFSET", "0")))
     parser.add_argument("--show-pin", action="store_true", help="print the pairing PIN and exit")
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
     if args.show_pin:
         cfg = Library._load(CONFIG / "config.json", {})
         print(cfg.get("pin", "(start the server once first)"))

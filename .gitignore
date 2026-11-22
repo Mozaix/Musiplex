@@ -9,3 +9,4 @@ xcuserdata/
 local.properties
 *.p12
 *.keystore
+Android/app/src/main/assets/index.html

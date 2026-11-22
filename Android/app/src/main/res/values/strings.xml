@@ -1,3 +1,11 @@
 <resources>
     <string name="app_name">Musiplex</string>
+    <string name="widget_now">Now Playing</string>
+    <string name="widget_now_desc">What\'s playing on any of your devices, with play, pause and skip.</string>
+    <string name="widget_play">Play Music</string>
+    <string name="widget_play_desc">Play Something (picked for you) or Continue where you left off.</string>
+    <string name="sc_surprise">Play Something</string>
+    <string name="sc_surprise_long">Play something picked for you</string>
+    <string name="sc_continue">Continue</string>
+    <string name="sc_continue_long">Continue what you were playing</string>
 </resources>

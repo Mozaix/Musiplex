@@ -27,9 +27,20 @@ Everything is on the [latest release](https://github.com/Mozaix/Musiplex/release
 
 **Pairing:** a phone asks for the server's 6‑digit PIN once. It's in Musiplex's Settings on the Mac, and in the Musiplex window on Windows and Linux.
 
-**Windows details:** music is read from your **Music** folder and **Documents › Songs** (drop new files in **Documents › Songs › Floaters**). The PIN and settings live in `%APPDATA%\Musiplex`. To stop it starting at login, run `Musiplex.exe --uninstall`.
+**Windows** works like the Mac app, minus the Apple-only parts:
+- **The Musiplex window:** Home, Songs, Albums, Artists, playlists in the sidebar (drag songs onto them, drag to reorder), Surprise and Guess, search, the player bar with crossfade and a speaker button (this PC's speakers and Bluetooth headphones/speakers, or a phone). It plays the music itself, and closing the window keeps the music going.
+- **Settings:** the server's PIN and addresses, connected devices, music folders (**Import Folder…**), Floating, **Your Taste** with **Discover** (new songs per genre with previews, export for Spotify via TuneMyMusic or Soundiiz), version history with revert, crossfade, duplicates.
+- **The notch:** a slim bar at the top of the screen. Hover over it for the song and controls, a file box (drop files on it), clipboard history, notes, a currency converter, settings and the battery.
+- **Mini player** that stays on top, and a **tray icon** with play/pause/next.
+- Music comes from your **Music** folder, **Documents › Songs** (new files in **Documents › Songs › Floaters**) and any folder you import. Settings live in `%APPDATA%\Musiplex`. To stop it starting at login, turn it off in Settings or run `Musiplex.exe --uninstall`.
 
-**Android details:** pick your server from the list (same Wi‑Fi) or type its address (for example its Tailscale `100.x.y.z` address when you're away). Tap **Play here** to make the phone the speaker; otherwise it's a remote for whatever is playing. It keeps playing with the screen off.
+**Android** works like the iPhone app, minus the Apple-only parts:
+- Songs, Albums, Playlists, Offline and History tabs; Surprise and Guess; making, renaming, rearranging and editing playlists; reverting versions.
+- The mini player expands into Now Playing (artwork colours, scrub bar, crossfade, choosing which device plays).
+- **Downloads** for offline listening (Sync downloads every song), with offline Surprise.
+- **Lock screen and notification player** with artwork, seek bar and buttons (headphone and Bluetooth buttons work too), shown whenever something plays on any of your devices.
+- **Widgets:** Now Playing (song, artwork, controls) and Play Music (Play Something / Continue). Long-press the app icon for the same two shortcuts.
+- Pick your server from the list (same Wi‑Fi) or type its address (its Tailscale `100.x.y.z` address when you're away).
 
 ---
 
@@ -228,6 +239,7 @@ You can't merge Bluetooth and Wi‑Fi into one faster connection: Bluetooth adds
 | `Live/`, `LiveShared/` | Dynamic Island / Live Activity widget |
 | `Shared/` | Models, playback engine (crossfade), shared UI |
 | `Config/` | Info.plist files |
+| `Client/` | The player page shared by Android and the Windows / Linux app window (`musiplex.html`) |
 | `Linux/` | The Linux and Windows server (`musiplex_server.py`) and the Linux installer |
 | `Windows/` | The Windows launcher, built into `Musiplex.exe` by GitHub Actions |
 | `Android/` | The Android app (built into the APK by GitHub Actions) |

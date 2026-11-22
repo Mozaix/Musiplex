@@ -31,9 +31,11 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install aiohttp mutagen zeroconf pyinstaller pillow
+          python -m pip install aiohttp mutagen zeroconf pyinstaller pillow pywebview pystray
           pyinstaller --onefile --noconsole --name Musiplex --icon Linux/musiplex.png `
             --paths Linux --hidden-import musiplex_server --collect-submodules zeroconf `
+            --collect-all webview --hidden-import clr --hidden-import pystray._win32 `
+            --add-data "Client/musiplex.html;." --add-data "Linux/musiplex.png;." `
             Windows/musiplex_windows.py
       - name: Check that the server starts
         shell: pwsh
@@ -44,9 +46,25 @@ jobs:
             Start-Sleep -Milliseconds 500
             try { if ((Invoke-WebRequest http://127.0.0.1:7860/ping -UseBasicParsing).Content -like "musiplex*") { $ok = $true; break } } catch {}
           }
+          $page = 0
+          try { $page = (Invoke-WebRequest http://127.0.0.1:7860/app -UseBasicParsing).StatusCode } catch {}
           Get-Content "$env:APPDATA/Musiplex/server.log" -ErrorAction SilentlyContinue
           Stop-Process $p -Force
           if (-not $ok) { throw "server didn't start" }
+          if ($page -ne 200) { throw "app page missing ($page)" }
+      - name: Check that the app opens (windows, tray, server)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/Musiplex.exe -ArgumentList "--background" -PassThru
+          Start-Sleep -Seconds 20
+          $alive = -not $p.HasExited
+          $up = $false
+          try { $up = (Invoke-WebRequest http://127.0.0.1:7860/ping -UseBasicParsing).Content -like "musiplex*" } catch {}
+          Get-Content "$env:APPDATA/Musiplex/server.log" -ErrorAction SilentlyContinue
+          if ($alive) { Stop-Process $p -Force }
+          Write-Host "app still running: $alive, server answering: $up"
+          if (-not ($alive -and $up)) { throw "the app didn't stay up" }
       - name: Attach to the release
         shell: pwsh
         env:

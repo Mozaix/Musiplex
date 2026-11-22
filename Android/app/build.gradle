@@ -10,7 +10,7 @@ android {
         applicationId "com.musiplex.android"
         minSdk 26
         targetSdk 34
-        versionCode 5
+        versionCode 6
         versionName "2.3"
     }
 
@@ -41,3 +41,11 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 }
+
+// The player page is shared with the Windows and Linux app window: Client/musiplex.html.
+tasks.register("copyClient", Copy) {
+    from(rootProject.file("../Client/musiplex.html"))
+    into("src/main/assets")
+    rename { "index.html" }
+}
+preBuild.dependsOn("copyClient")

@@ -1,0 +1,1520 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Musiplex</title>
+<!--
+  Musiplex player: one page for the Android app, the Windows / Linux app window, and the
+  Windows mini player (?mode=mini) and notch (?mode=notch). Wide windows get the Mac app's
+  layout (sidebar, player bar); narrow ones get the iPhone app's (tabs, mini player that
+  expands into Now Playing). Nothing about anyone is built in: the server address, its key
+  and this device's ID are made or entered on the device and kept only there.
+-->
+<style>
+:root{--bg:#07070b;--side:#0d0d12;--panel:#121218;--raised:rgba(255,255,255,.07);--hover:rgba(255,255,255,.05);--line:rgba(255,255,255,.08);
+--text:#fff;--dim:rgba(255,255,255,.58);--accent:#a38aff;--accent2:#ff6ea3;--grad:linear-gradient(135deg,var(--accent),var(--accent2));--red:#ff453a;--green:#30d158}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:15px/1.35 system-ui,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+body:not(.desk) *{-webkit-user-select:none;user-select:none}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+input,textarea,select{font:inherit;color:var(--text);background:var(--raised);border:0;border-radius:10px;padding:9px 12px;width:100%;outline:none;-webkit-user-select:text;user-select:text}
+select{width:auto}select option{background:#1c1c22}
+svg{width:1em;height:1em;fill:currentColor;flex:none}
+.hidden{display:none!important}.dim{color:var(--dim)}.grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:6px;border:3px solid transparent;background-clip:padding-box}
+.art{background:linear-gradient(rgba(255,255,255,.13),rgba(255,255,255,.05)) center/cover no-repeat;border-radius:6px;flex:none;position:relative;overflow:hidden}
+.art.none::after{content:"♪";position:absolute;inset:0;display:grid;place-items:center;color:rgba(255,255,255,.3);font-size:150%}
+.art.round{border-radius:50%}
+/* ---------------- shared pieces ---------------- */
+.row{display:flex;align-items:center;gap:12px;padding:7px 16px;width:100%;text-align:left;cursor:default}
+.row:hover{background:var(--hover)}.row:active{background:var(--raised)}
+.row .art{width:48px;height:48px}
+.row .t{flex:1;min-width:0}.row .t div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .sub{font-size:13.5px;color:var(--dim)}
+.row .al,.row .du{display:none;color:var(--dim);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row.cur .title{color:var(--accent)}
+.row .wave{display:none;color:var(--accent);margin-right:6px;font-size:10px;letter-spacing:-2px}.row.cur.playing .wave{display:inline}
+.row .side{width:32px;height:32px;display:grid;place-items:center;font-size:20px;color:var(--dim)}.row .side.ok{color:var(--accent)}
+.ring{width:20px;height:20px;border-radius:50%;background:conic-gradient(var(--accent) calc(var(--p)*1%),rgba(255,255,255,.15) 0)}
+.ring::after{content:"";display:block;margin:3px;width:14px;height:14px;border-radius:50%;background:var(--bg)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:18px 14px;padding:0 16px}
+.tile{text-align:left;min-width:0}.tile .art{width:100%;aspect-ratio:1;border-radius:10px;transition:transform .15s}.tile:hover .art{transform:scale(1.02)}
+.tile div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tile .n{font-size:14px;font-weight:600;margin-top:6px}.tile .s{font-size:13px;color:var(--dim)}
+.tile.artist{text-align:center}.tile.artist .art{border-radius:50%}
+.cards{display:flex;gap:12px;padding:0 16px 12px}
+.card{flex:1;min-width:0;min-height:110px;border-radius:16px;background:var(--grad);color:#000;padding:14px;display:flex;flex-direction:column;text-align:left}
+.card svg{font-size:22px;margin-bottom:auto}.card b{font-size:17px}.card small{opacity:.7;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.btns{display:flex;gap:10px;padding:0 16px 10px;flex-wrap:wrap}
+.btn{flex:1;display:flex;justify-content:center;align-items:center;gap:6px;background:var(--raised);border-radius:12px;padding:10px 14px;font-size:14.5px;font-weight:600;white-space:nowrap}
+.btn:hover{background:rgba(255,255,255,.1)}.btn.primary{background:var(--accent);color:#000}.btn.small{flex:none;padding:6px 12px;font-size:13px;border-radius:999px}
+.btn.red{color:var(--red)}
+.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:6px 12px;font-size:13px;font-weight:600}
+.pills{display:flex;gap:4px;flex-wrap:wrap}.pills button{padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.1);font-size:12px;font-weight:600}
+.pills button.on{background:var(--grad);color:#000}
+.empty{padding:50px 24px;text-align:center;color:var(--dim)}.empty svg{font-size:40px;display:block;margin:0 auto 10px}
+.listhead{padding:4px 16px 16px;display:flex;flex-direction:column;align-items:center;text-align:center}
+.listhead .art{width:min(62vw,240px);height:min(62vw,240px);border-radius:12px;box-shadow:0 12px 30px rgba(0,0,0,.5)}
+.listhead h2{margin:14px 0 2px;font-size:22px}
+.back{display:flex;align-items:center;gap:4px;color:var(--accent);padding:12px 12px 4px;font-size:17px}
+.hist{padding:10px 16px;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:flex-start}
+.hist .t{flex:1;min-width:0}.hist b{color:var(--accent);margin-right:6px}.hist .ch{font-size:13.5px;color:var(--dim);margin-top:2px}
+.setcard{margin:0 16px 14px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.setcard h3{margin:0 0 10px;font-size:15px;display:flex;align-items:center;gap:8px}.setcard h3 svg{color:var(--accent)}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:5px 0;font-size:14px}.kv span:first-child{color:var(--dim)}
+.kv code{font:13px ui-monospace,Consolas,monospace;-webkit-user-select:text;user-select:text}
+.toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0;width:100%;text-align:left;font-size:14px}
+.toggle i{width:34px;height:20px;border-radius:999px;background:rgba(255,255,255,.18);position:relative;flex:none;transition:background .2s}
+.toggle i::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .2s}
+.toggle.yes i{background:var(--grad)}.toggle.yes i::after{left:16px}
+.note{font-size:12px;color:var(--dim);margin-top:4px}
+.ring2{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green)}
+/* ---------------- phone layout ---------------- */
+#phone{position:absolute;inset:0;overflow-y:auto;padding-bottom:110px}
+#phone header{display:flex;align-items:center;gap:8px;padding:14px 16px}
+#phone header h1{font-size:34px;margin:0;flex:1;font-weight:800;letter-spacing:-.5px}
+.status{display:flex;align-items:center;gap:6px;background:var(--raised);border-radius:999px;padding:7px 12px;font-size:13px;font-weight:600;max-width:52%}
+.status span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.status i{width:8px;height:8px;border-radius:50%;background:#8e8e93;flex:none}.status i.on{background:var(--green)}
+.gear{width:34px;height:34px;display:grid;place-items:center;font-size:19px;background:var(--raised);border-radius:50%}
+.seg{display:flex;margin:0 16px 12px;background:var(--raised);border-radius:9px;padding:2px}
+.seg button{flex:1;padding:6px 0;border-radius:7px;font-size:13px;font-weight:500;color:var(--dim)}
+.seg button.on{background:#636366;color:#fff;font-weight:600}
+.search{display:flex;align-items:center;gap:8px;margin:0 16px 10px;background:var(--raised);border-radius:10px;padding:0 12px;color:var(--dim)}
+.search input{background:none;padding:9px 0}
+#mini{position:fixed;left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));display:flex;align-items:center;gap:12px;padding:8px 10px;
+background:rgba(40,40,48,.82);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid var(--line);border-radius:14px;z-index:5}
+#mini .art{width:42px;height:42px}#mini .t{flex:1;min-width:0}#mini .t div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#mini .n{font-size:15px;font-weight:600}#mini .w{font-size:11px;font-weight:600;color:var(--accent);display:flex;align-items:center;gap:4px}
+#mini button{width:40px;height:40px;display:grid;place-items:center;font-size:22px}
+#full{position:fixed;inset:0;z-index:10;background:var(--bg);display:flex;flex-direction:column;align-items:center;transform:translateY(100%);transition:transform .42s cubic-bezier(.2,.9,.25,1)}
+#full.open{transform:none}
+#full .tint{position:absolute;inset:0;background:linear-gradient(var(--tint,transparent),var(--bg) 85%);opacity:.75;pointer-events:none}
+#full .in{position:relative;width:100%;max-width:520px;height:100%;display:flex;flex-direction:column;padding:0 26px calc(16px + env(safe-area-inset-bottom));overflow-y:auto}
+.grab{height:34px;display:grid;place-items:center;width:100%;flex:none}.grab i{width:40px;height:5px;border-radius:3px;background:rgba(255,255,255,.35)}
+#bigart{width:100%;aspect-ratio:1;max-width:440px;margin:6px auto 0;border-radius:14px;box-shadow:0 12px 30px rgba(0,0,0,.5);transition:transform .4s cubic-bezier(.3,1.4,.5,1)}
+#bigart.paused{transform:scale(.9)}
+.np{display:flex;align-items:center;gap:12px;margin-top:24px}.np .t{flex:1;min-width:0}.np .t div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#ftitle{font-size:22px;font-weight:700}#fartist{color:var(--dim)}
+.np>button:not(.t){font-size:24px;width:36px;height:36px;display:grid;place-items:center}
+.scrub{touch-action:none;padding:8px 0;cursor:pointer}
+.scrub .track{height:6px;border-radius:3px;background:rgba(255,255,255,.2);overflow:hidden;transition:height .15s}
+.scrub.drag .track{height:10px}.scrub i{display:block;height:100%;width:0;background:#fff}
+.times{display:flex;justify-content:space-between;font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums}
+.ctl{display:flex;justify-content:space-between;align-items:center;margin-top:14px}
+.ctl button{width:48px;height:48px;display:grid;place-items:center;font-size:22px}
+.ctl .big{width:72px;height:72px;border-radius:50%;background:#fff;color:#000;font-size:30px}
+.on{color:var(--accent)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:4px;background:rgba(0,0,0,.3);border-radius:999px;margin-top:22px;scrollbar-width:none;flex:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{display:flex;align-items:center;gap:6px;white-space:nowrap;padding:9px 14px;border-radius:999px;font-size:14px;font-weight:600}
+.chip.sel{background:var(--grad);color:#000}
+.vol{display:flex;align-items:center;gap:10px;color:var(--dim);font-size:14px}.vol input{padding:0;background:none;accent-color:#fff}
+.hint{text-align:center;font-size:11px;color:var(--dim);margin-top:10px}
+/* ---------------- desktop layout (Mac app) ---------------- */
+#desk{position:absolute;inset:0;display:grid;grid-template-columns:240px 1fr;grid-template-rows:1fr auto}
+#sidebar{background:var(--side);border-right:1px solid var(--line);overflow-y:auto;padding:16px 10px 20px;display:flex;flex-direction:column;gap:2px}
+.logo{display:flex;align-items:center;gap:10px;padding:6px 8px 14px;font-size:19px;font-weight:700}
+.logo b{width:30px;height:30px;border-radius:8px;background:var(--grad);display:grid;place-items:center;color:#000;font-size:16px}
+#sidebar .search{margin:0 0 10px}
+.nav{display:flex;align-items:center;gap:12px;padding:7px 10px;border-radius:8px;font-weight:600;color:var(--dim);width:100%;text-align:left}
+.nav svg{width:18px;height:18px}.nav:hover{background:var(--hover);color:#fff}.nav.sel{background:var(--raised);color:#fff}.nav.sel svg{color:var(--accent)}
+.sec{display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:600;color:var(--dim);letter-spacing:.06em;padding:16px 10px 4px}
+.sec button{color:var(--dim);font-size:14px}.sec button:hover{color:#fff}
+.plrow{display:flex;align-items:center;gap:10px;padding:5px 10px;border-radius:8px;font-size:14px;width:100%;text-align:left}
+.plrow:hover{background:var(--hover)}.plrow.sel{background:var(--raised)}.plrow .art{width:26px;height:26px;border-radius:4px}
+.plrow span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.plrow.drop{box-shadow:inset 0 2px 0 var(--accent)}
+.fy{display:flex;align-items:center;gap:10px;padding:5px 10px;border-radius:8px;width:100%;text-align:left}
+.fy:hover{background:var(--hover)}.fy.sel{background:var(--raised)}
+.fy b{width:26px;height:26px;border-radius:6px;background:var(--grad);display:grid;place-items:center;color:#000;font-size:14px;flex:none}
+.fy div{min-width:0}.fy div span{display:block;font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#main{overflow-y:auto;padding:22px 12px 30px;position:relative}
+#main h1{font-size:26px;margin:0 16px 14px;display:flex;align-items:baseline;gap:10px}#main h1 small{font-size:17px;color:var(--dim);font-weight:500}
+body.desk .row{padding:6px 16px;border-radius:8px}
+body.desk .row .art{width:40px;height:40px}
+body.desk .row .al{display:block;width:28%}body.desk .row .du{display:block;width:52px;text-align:right}
+body.desk .listhead{flex-direction:row;align-items:flex-end;gap:22px;text-align:left}
+body.desk .listhead .art{width:190px;height:190px}body.desk .listhead h2{font-size:30px;margin:6px 0}
+body.desk .back{padding:0 16px 10px;font-size:15px}
+body.desk .grid{grid-template-columns:repeat(auto-fill,minmax(170px,1fr))}
+#bar{grid-column:1/3;display:grid;grid-template-columns:minmax(200px,1fr) minmax(300px,1.4fr) minmax(200px,1fr);align-items:center;gap:16px;padding:10px 16px;background:var(--panel);border-top:1px solid var(--line)}
+#bar .now{display:flex;align-items:center;gap:12px;min-width:0;text-align:left}#bar .now .art{width:52px;height:52px}
+#bar .now div{min-width:0}#bar .now b,#bar .now span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#bar .now span{color:var(--dim);font-size:13px}
+#bar .mid .ctl{margin:0;justify-content:center;gap:14px}#bar .mid .ctl button{width:34px;height:34px;font-size:17px}
+#bar .mid .ctl .big{width:38px;height:38px;font-size:16px}
+#bar .mid .sc{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--dim);font-variant-numeric:tabular-nums}#bar .mid .scrub{flex:1;padding:6px 0}
+#bar .mid .scrub .track{height:4px}#bar .mid .scrub.drag .track,#bar .mid .scrub:hover .track{height:6px}#bar .mid .scrub i{background:var(--grad)}
+#bar .right{display:flex;align-items:center;justify-content:flex-end;gap:8px}#bar .right .vol{width:120px}
+.ib{width:32px;height:32px;display:grid;place-items:center;border-radius:8px;font-size:17px;color:var(--dim)}.ib:hover{background:var(--hover);color:#fff}.ib.on{color:var(--accent)}
+.spk{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;background:rgba(163,138,255,.15);color:var(--accent);font-size:12px;font-weight:600;max-width:170px}
+.spk span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#drawer{position:absolute;right:0;top:0;bottom:0;width:340px;background:var(--panel);border-left:1px solid var(--line);z-index:6;overflow-y:auto;transform:translateX(100%);transition:transform .25s}
+#drawer.open{transform:none}#drawer h3{margin:16px;font-size:17px}
+/* ---------------- sheets & menus ---------------- */
+.sheet{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;opacity:0;pointer-events:none;transition:opacity .25s}
+.sheet.open{opacity:1;pointer-events:auto}
+.sheet .box{width:100%;max-width:620px;max-height:88%;overflow-y:auto;background:#1c1c22;border-radius:14px 14px 0 0;padding:8px 0 calc(16px + env(safe-area-inset-bottom));transform:translateY(100%);transition:transform .3s cubic-bezier(.2,.9,.25,1)}
+body.desk .sheet{align-items:center}body.desk .sheet .box{border-radius:14px;max-height:80%}
+.sheet.open .box{transform:none}
+.sheet h3{margin:8px 16px 12px;font-size:19px;display:flex;align-items:center;gap:8px}.sheet h3 .x{margin-left:auto;font-size:15px;color:var(--dim)}
+.sheet .pad{padding:0 16px;display:grid;gap:10px}
+.menu button{display:flex;align-items:center;gap:14px;width:100%;padding:13px 18px;font-size:15.5px;text-align:left}
+.menu button:hover{background:var(--hover)}.menu button svg{font-size:19px;color:var(--dim)}.menu .red,.menu .red svg{color:var(--red)}
+#pop{position:fixed;z-index:30;min-width:220px;max-width:320px;max-height:70vh;overflow-y:auto;background:#24242c;border:1px solid var(--line);border-radius:10px;padding:5px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+#pop button{display:flex;align-items:center;gap:10px;width:100%;padding:7px 10px;border-radius:6px;font-size:13.5px;text-align:left}
+#pop button:hover{background:var(--accent);color:#000}#pop button svg{font-size:15px}#pop .red{color:var(--red)}#pop .h{font-size:11px;color:var(--dim);padding:6px 10px 2px;font-weight:600}
+#pop hr{border:0;border-top:1px solid var(--line);margin:4px 0}
+.found{display:grid;gap:8px}.found button{display:flex;justify-content:space-between;align-items:center;background:var(--raised);border-radius:12px;padding:12px 14px;text-align:left;width:100%}
+#toast{position:fixed;left:50%;bottom:110px;transform:translateX(-50%);background:rgba(50,50,58,.96);padding:10px 16px;border-radius:999px;font-size:14px;z-index:40;opacity:0;transition:opacity .3s;pointer-events:none;white-space:nowrap}
+#toast.show{opacity:1}
+/* ---------------- mini player window ---------------- */
+body.m{background:#121218}
+#minip{position:absolute;inset:0;display:flex;flex-direction:column;padding:12px 14px}
+#minip .top{display:flex;gap:12px;align-items:center}#minip .top .art{width:64px;height:64px;border-radius:10px}
+#minip .top .t{flex:1;min-width:0}#minip .top .t div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#minip .ctl{margin-top:6px}#minip .ctl button{width:36px;height:36px;font-size:17px}#minip .ctl .big{width:42px;height:42px;font-size:18px}
+#minip .q{flex:1;overflow-y:auto;margin:8px -14px 0;border-top:1px solid var(--line)}
+/* ---------------- notch window ---------------- */
+body.n{background:transparent}
+#notch{position:absolute;inset:0;background:#000;border-radius:0 0 16px 16px;overflow:hidden;display:flex;flex-direction:column}
+#notch .pill{height:32px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;gap:8px;flex:none}
+#notch .pill .art{width:20px;height:20px;border-radius:5px}
+.bars{display:flex;gap:2px;align-items:flex-end;height:12px}.bars i{width:3px;background:var(--grad);border-radius:1px;animation:b 1s ease-in-out infinite}
+.bars i:nth-child(2){animation-delay:.2s}.bars i:nth-child(3){animation-delay:.4s}.bars i:nth-child(4){animation-delay:.1s}
+@keyframes b{0%,100%{height:3px}50%{height:12px}}.bars.stop i{animation:none;height:3px}
+#notch .tabs{display:flex;align-items:center;gap:2px;padding:4px 10px 0}
+#notch .tabs button{width:34px;height:28px;border-radius:8px;display:grid;place-items:center;color:var(--dim);font-size:15px}
+#notch .tabs button:hover{color:#fff;background:var(--hover)}#notch .tabs button.sel{color:#fff;background:var(--raised)}
+#notch .body{flex:1;padding:10px 18px 14px;overflow:hidden;display:flex}
+#notch .body>div{flex:1;min-width:0;overflow-y:auto}
+#notch .mus{display:flex;gap:18px;align-items:center}#notch .mus .art{width:120px;height:120px;border-radius:12px}
+#notch .mus .ctl{margin-top:4px;justify-content:flex-start;gap:16px}#notch .mus .ctl button{width:28px;height:28px;font-size:15px}
+#notch .mus .ctl .big{width:36px;height:36px;font-size:15px}
+.drop{border:1.5px dashed rgba(255,255,255,.25);border-radius:12px;padding:14px;text-align:center;color:var(--dim);font-size:13px}
+.drop.over{border-color:var(--accent);color:#fff;background:rgba(163,138,255,.1)}
+.fileitem{display:flex;align-items:center;gap:8px;padding:5px 2px;font-size:13px}.fileitem span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.clip{display:block;width:100%;text-align:left;padding:6px 8px;border-radius:8px;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.clip:hover{background:var(--raised)}
+</style></head>
+<body>
+
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.4-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></symbol>
+<symbol id="i-pause" viewBox="0 0 24 24"><rect x="5.5" y="4" width="4.5" height="16" rx="1.2"/><rect x="14" y="4" width="4.5" height="16" rx="1.2"/></symbol>
+<symbol id="i-next" viewBox="0 0 24 24"><path d="M3 6.2v11.6a.8.8 0 0 0 1.2.7l8.3-5.8a.8.8 0 0 0 0-1.4L4.2 5.5a.8.8 0 0 0-1.2.7zm9.5 0v11.6a.8.8 0 0 0 1.2.7l8.3-5.8a.8.8 0 0 0 0-1.4l-8.3-5.8a.8.8 0 0 0-1.2.7z"/></symbol>
+<symbol id="i-prev" viewBox="0 0 24 24"><path d="M21 6.2v11.6a.8.8 0 0 1-1.2.7l-8.3-5.8a.8.8 0 0 1 0-1.4l8.3-5.8a.8.8 0 0 1 1.2.7zm-9.5 0v11.6a.8.8 0 0 1-1.2.7L2 12.7a.8.8 0 0 1 0-1.4l8.3-5.8a.8.8 0 0 1 1.2.7z"/></symbol>
+<symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M17 3l4 4-4 4V8h-2.2c-1.3 0-2.4.7-3.1 1.8l-.6 1-1.2-2 .1-.2A5.6 5.6 0 0 1 14.8 6H17V3zM2 6h3.2c1.9 0 3.7 1 4.7 2.7l4 6.6c.6 1.1 1.8 1.7 3 1.7H17v-3l4 4-4 4v-3h-2.1c-1.9 0-3.7-1-4.7-2.7l-4-6.6A3.5 3.5 0 0 0 5.2 8H2V6zm0 10h3.2c1.2 0 2.3-.6 2.9-1.6l.4-.7 1.2 2-.1.2A5.5 5.5 0 0 1 5.2 18H2v-2z"/></symbol>
+<symbol id="i-repeat" viewBox="0 0 24 24"><path d="M17 1l4 4-4 4V6H7a3 3 0 0 0-3 3v2H2V9a5 5 0 0 1 5-5h10V1zM7 23l-4-4 4-4v3h10a3 3 0 0 0 3-3v-2h2v2a5 5 0 0 1-5 5H7v3z"/></symbol>
+<symbol id="i-list" viewBox="0 0 24 24"><path d="M8 5h13v2H8zm0 6h13v2H8zm0 6h13v2H8zM3 4.5h2.5V7H3zm0 6h2.5V13H3zm0 6h2.5V19H3z"/></symbol>
+<symbol id="i-down" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm0 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16zm1 3v6.6l2.3-2.3 1.4 1.4L12 17.4l-4.7-4.7 1.4-1.4 2.3 2.3V7h2z"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm-1.2 13.6 6.5-6.5-1.4-1.4-5.1 5.1-2.4-2.4-1.4 1.4 3.8 3.8z"/></symbol>
+<symbol id="i-tick" viewBox="0 0 24 24"><path d="m9.5 16.2-4.2-4.2-1.4 1.4 5.6 5.6 11-11-1.4-1.4z"/></symbol>
+<symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M10 2l1.9 5.6L17.5 9.5l-5.6 1.9L10 17l-1.9-5.6L2.5 9.5l5.6-1.9zM18 13l1 2.8 2.8 1-2.8 1L18 21l-1-3.2-2.8-1 2.8-1z"/></symbol>
+<symbol id="i-wand" viewBox="0 0 24 24"><path d="M14.6 2.6l1 2.4 2.4 1-2.4 1-1 2.4-1-2.4-2.4-1 2.4-1zM19 9l.7 1.6 1.6.7-1.6.7L19 13.6l-.7-1.6-1.6-.7 1.6-.7zM16.2 9.4l1.4 1.4L5.8 22.6l-1.4-1.4z"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7z"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><path d="M10 3a7 7 0 0 1 5.6 11.2l5.1 5.1-1.4 1.4-5.1-5.1A7 7 0 1 1 10 3zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10z"/></symbol>
+<symbol id="i-back" viewBox="0 0 24 24"><path d="M15.4 4.6 8 12l7.4 7.4-1.4 1.4L5.2 12 14 3.2z"/></symbol>
+<symbol id="i-phone" viewBox="0 0 24 24"><path d="M8 1h8a3 3 0 0 1 3 3v16a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3V4a3 3 0 0 1 3-3zm0 2a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1h-1.5l-.5 1h-4l-.5-1H8z"/></symbol>
+<symbol id="i-laptop" viewBox="0 0 24 24"><path d="M5 4h14a2 2 0 0 1 2 2v10h2v1.5a1.5 1.5 0 0 1-1.5 1.5h-19A1.5 1.5 0 0 1 1 17.5V16h2V6a2 2 0 0 1 2-2zm0 2v10h14V6H5z"/></symbol>
+<symbol id="i-speaker" viewBox="0 0 24 24"><path d="M3 9h4l5-4v14l-5-4H3zm13.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></symbol>
+<symbol id="i-hifi" viewBox="0 0 24 24"><path d="M6 2h12a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm6 3a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm0 5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zm0 2.5a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/></symbol>
+<symbol id="i-head" viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0-9 9v6a3 3 0 0 0 3 3h2v-8H5v-1a7 7 0 0 1 14 0v1h-3v8h2a3 3 0 0 0 3-3v-6a9 9 0 0 0-9-9z"/></symbol>
+<symbol id="i-next1" viewBox="0 0 24 24"><path d="M4 6h10v2H4zm0 5h10v2H4zm0 5h6v2H4zm12-2 6 4-6 4z"/></symbol>
+<symbol id="i-queue" viewBox="0 0 24 24"><path d="M4 6h12v2H4zm0 5h12v2H4zm0 5h8v2H4zm14-2h2v3h3v2h-3v3h-2v-3h-3v-2h3z"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24"><path d="M9 3h6l1 2h4v2H4V5h4zm-3 6h12l-1 12H7z"/></symbol>
+<symbol id="i-minus" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm-5 9v2h10v-2z"/></symbol>
+<symbol id="i-sync" viewBox="0 0 24 24"><path d="M12 4a8 8 0 0 1 7.4 5H17v2h6V5h-2v2.3A10 10 0 0 0 2 12h2a8 8 0 0 1 8-8zm8 8a8 8 0 0 1-15.4 3H7v-2H1v6h2v-2.3A10 10 0 0 0 22 12h-2z"/></symbol>
+<symbol id="i-gear" viewBox="0 0 24 24"><path d="M13.5 2l.5 2.6a8 8 0 0 1 2 1.1l2.5-.9 1.5 2.6-2 1.7a8 8 0 0 1 0 2.3l2 1.7-1.5 2.6-2.5-.9a8 8 0 0 1-2 1.1l-.5 2.6h-3l-.5-2.6a8 8 0 0 1-2-1.1l-2.5.9-1.5-2.6 2-1.7a8 8 0 0 1 0-2.3l-2-1.7 1.5-2.6 2.5.9a8 8 0 0 1 2-1.1L10.5 2zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></symbol>
+<symbol id="i-home" viewBox="0 0 24 24"><path d="M12 3l9 8h-3v9h-5v-6h-2v6H6v-9H3z"/></symbol>
+<symbol id="i-note" viewBox="0 0 24 24"><path d="M9 3v11.3A3.5 3.5 0 1 0 11 17V8h8V3z"/></symbol>
+<symbol id="i-stack" viewBox="0 0 24 24"><path d="M4 7h16v13H4zm2-3h12v2H6zm2-2h8v1H8z"/></symbol>
+<symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 1 4 4v5a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4zm-7 9h2a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.9V21h-2v-3.1A7 7 0 0 1 5 11z"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+<symbol id="i-float" viewBox="0 0 24 24"><path d="M12 2c3 3 5 6 5 9a5 5 0 0 1-10 0c0-3 2-6 5-9zm-9 17c2 0 2 1.5 4.5 1.5S10 19 12 19s2 1.5 4.5 1.5S19 19 21 19v2c-2 0-2 1.5-4.5 1.5S14 21 12 21s-2 1.5-4.5 1.5S5 21 3 21z"/></symbol>
+<symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 21s-8-5.2-8-11a4.7 4.7 0 0 1 8-3.3A4.7 4.7 0 0 1 20 10c0 5.8-8 11-8 11z"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm-1 5v6l5 3 1-1.7-4-2.3V7z"/></symbol>
+<symbol id="i-mini" viewBox="0 0 24 24"><path d="M3 4h18v16H3zm2 2v12h14V6zm6 5h7v6h-7z"/></symbol>
+<symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 4h7v2H7.4l4.3 4.3-1.4 1.4L6 7.4V11H4zm16 16h-7v-2h3.6l-4.3-4.3 1.4-1.4 4.3 4.3V13h2z"/></symbol>
+<symbol id="i-box" viewBox="0 0 24 24"><path d="M3 7l9-4 9 4v10l-9 4-9-4zm9-1.8L6.4 7.6 12 10l5.6-2.4zM5 9v6.7l6 2.6V11.6zm14 0-6 2.6v6.7l6-2.6z"/></symbol>
+<symbol id="i-clip" viewBox="0 0 24 24"><path d="M9 2h6v2h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3zm0 4H6v14h12V6h-3v1H9zm0 5h6v2H9zm0 4h6v2H9z"/></symbol>
+<symbol id="i-pen" viewBox="0 0 24 24"><path d="M15 3l6 6L9 21H3v-6zm0 2.8L5 15.8V19h3.2l10-10z"/></symbol>
+<symbol id="i-money" viewBox="0 0 24 24"><path d="M2 6h20v12H2zm2 2v8h16V8zm8 1a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></symbol>
+<symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></symbol>
+<symbol id="i-link" viewBox="0 0 24 24"><path d="M14 3h7v7h-2V6.4l-8.3 8.3-1.4-1.4L17.6 5H14zM5 5h6v2H5v12h12v-6h2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><path d="M8 3h11a2 2 0 0 1 2 2v11h-2V5H8zM5 7h11a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zm0 2v11h11V9z"/></symbol>
+<symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+</svg>
+
+<div id="root"></div>
+<div class="sheet" id="sheet"><div class="box" id="sheetbox"></div></div>
+<div id="pop" class="hidden"></div>
+<div id="toast"></div>
+<audio id="a0" preload="auto"></audio><audio id="a1" preload="auto"></audio><audio id="pv"></audio>
+
+<script>
+"use strict";
+// ======================================================================= basics
+const $ = id => document.getElementById(id);
+const bridge = window.Android || null;
+const Q = new URLSearchParams(location.search);
+const MODE = Q.get("mode") || "full";                       // full | mini | notch
+const ANDROID = !!bridge;
+const SERVED = /^https?:$/.test(location.protocol) && location.pathname.startsWith("/app");
+let api = null;                                              // Windows app (pywebview) helpers
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+};
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const icon = n => `<svg><use href="#i-${n}"/></svg>`;
+const h = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; };
+function toast(t) { const e = $("toast"); e.textContent = t; e.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => e.classList.remove("show"), 2400); }
+const fmt = s => { s = Math.max(0, Math.floor(s || 0)); return s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+const wide = () => MODE === "full" && !ANDROID && innerWidth >= 820;
+
+// ======================================================================= identity & connection
+const OFF = Q.has("offset") ? (parseInt(Q.get("offset"), 10) || 0) : (SERVED && location.port ? (parseInt(location.port, 10) - 7860) : 0);
+const HTTP = 7860 + OFF, WS = 7861 + OFF;
+const PANEL = MODE !== "full";
+const idKey = PANEL ? `deviceID-${MODE}` : "deviceID";
+let deviceID = store.get(idKey, null);
+if (!deviceID) { deviceID = (ANDROID ? "android-" : PANEL ? `panel-${MODE}-` : "pc-") + (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(16).slice(2)); store.set(idKey, deviceID); }
+const KIND = ANDROID ? "android" : PANEL ? "panel" : "pc";
+let local = null;            // set when this window is on the server's own computer (/local/token)
+let deviceName = ANDROID ? bridge.deviceName() : "This computer";
+const myWord = ANDROID ? "phone" : "computer";
+
+let host = store.get("host", "");
+let tokens = store.get("tokens", {});
+let alts = store.get("alts", {});
+let ws = null, wsHost = "", authed = false, retry = null, wantPin = false, serverName = store.get("serverName", "");
+let catalog = store.get("catalog", { tracks: [], albums: [], playlists: [], history: [] });
+let byId = {};
+let state = null, stateAt = 0, devices = [], noSpeaker = false;
+let downloads = {};
+const progress = {};
+const linked = () => authed;
+let settings = Object.assign({ hideDupes: true, notchIdle: true, notchBattery: true }, store.get("settings", {}));
+const saveSettings = () => store.set("settings", settings);
+
+function indexCatalog() { byId = {}; (catalog.tracks || []).forEach(t => byId[t.id] = t); }
+indexCatalog();
+function loadDownloads() { downloads = {}; if (!bridge) return; try { JSON.parse(bridge.downloads()).forEach(d => downloads[d.id] = d); } catch {} }
+loadDownloads();
+
+const found = new Map();
+window.onFound = (name, hh) => {
+  if (found.has(hh)) return;
+  found.set(hh, name.replace(/\\032/g, " "));
+  if ($("found")) drawFound();
+  if (!host) start(hh);
+};
+
+function start(hh, pin) {
+  stop();
+  if (hh !== host) { host = hh; if (!local) store.set("host", hh); }
+  setMsg("Connecting…");
+  open([hh, ...(alts[hh] || [])], 0, pin);
+  drawStatus();
+}
+function stop() {
+  clearTimeout(retry); retry = null;
+  if (ws) { ws.onclose = null; try { ws.close(); } catch {} ws = null; }
+  authed = false; drawStatus();
+}
+function open(list, i, pin) {
+  const hh = list[i % list.length];
+  let sock;
+  try { sock = new WebSocket(`ws://${hh}:${WS}/`); } catch { return later(list, i + 1, pin); }
+  ws = sock; wsHost = hh;
+  const giveUp = setTimeout(() => { if (!authed) try { sock.close(); } catch {} }, 5000);
+  sock.onopen = () => {
+    const hello = { type: "hello", name: deviceName, deviceID, kind: KIND };
+    if (tokens[host]) hello.token = tokens[host];
+    if (pin) hello.pin = pin;
+    sock.send(JSON.stringify(hello));
+  };
+  sock.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch { return; } handle(m); };
+  sock.onclose = () => {
+    clearTimeout(giveUp);
+    if (ws !== sock) return;
+    const was = authed; authed = false; drawStatus(); if (was) drawPlayer();
+    if (wantPin) return;
+    if (!was) setMsg("Can't reach it. Check the address and that the server is running.");
+    later(list, i + 1, pin);
+  };
+}
+function later(list, i, pin) { clearTimeout(retry); retry = setTimeout(() => open(list, i, pin), 2500); }
+function send(m) { if (ws && authed && ws.readyState === 1) { ws.send(JSON.stringify(m)); return true; } return false; }
+let seq = Date.now() % 1000000;
+function command(action, extra) {
+  const c = Object.assign({ action }, extra || {});
+  if (!linked()) return offline.perform(c);
+  send({ type: "command", command: c, seq: ++seq });
+}
+const pendingRemote = [];
+function handle(m) {
+  switch (m.type) {
+    case "welcome":
+      authed = true; wantPin = false; offline.stop();
+      tokens[host] = m.token; if (!local) store.set("tokens", tokens);
+      if (m.hosts && m.hosts.length && !local) { alts[host] = m.hosts.filter(x => x !== host); store.set("alts", alts); }
+      serverName = m.name || host; store.set("serverName", serverName);
+      noSpeaker = !!m.noSpeaker || /\((Linux|Windows)\)$/.test(serverName);
+      devices = m.devices || [];
+      setState(m.state); drawStatus(); loadCatalog();
+      closeSheet("link"); setMsg("");
+      while (pendingRemote.length) window.remote(...pendingRemote.shift());
+      break;
+    case "denied": {
+      delete tokens[host]; store.set("tokens", tokens);
+      const tried = !!($("pin") && $("pin").value);
+      wantPin = true; stop();
+      openLink(tried ? "That PIN didn't work. It's in Settings on the Mac, or in the Musiplex window's Settings on Windows and Linux." : "Enter the 6‑digit PIN shown on the server. You only need it once.");
+      break;
+    }
+    case "state": case "promoted": if (m.state) setState(m.state); break;
+    case "tick":
+      if (state) { state.position = m.position || 0; state.isPlaying = !!m.isPlaying; stateAt = Date.now(); syncAudio(); }
+      break;
+    case "devices": devices = m.devices || []; drawPlayer(); break;
+    case "library": loadCatalog(); break;
+  }
+}
+
+// ======================================================================= server data
+const pending = {};
+window.onFetched = (id, status, text) => { const f = pending[id]; delete pending[id]; f && f(status, text); };
+function get(url, done, dataURL) {
+  if (bridge) { const id = String(Math.random()); pending[id] = done; dataURL ? bridge.getDataURL(id, url) : bridge.get(id, url); return; }
+  fetch(url).then(r => (dataURL ? r.blob().then(b => new Promise(ok => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.readAsDataURL(b); })) : r.text()).then(t => done(r.status, t))).catch(() => done(0, ""));
+}
+const base = () => `http://${wsHost}:${HTTP}`;
+const tok = () => encodeURIComponent(tokens[host] || "");
+const artURL = id => linked() && id ? `${base()}/art/${id}?t=${tok()}` : "";
+function setArt(el, id) {
+  if (!el) return;
+  const u = artURL(id);
+  el.classList.toggle("none", !u);
+  el.style.backgroundImage = u ? `url("${u}"), linear-gradient(rgba(255,255,255,.13),rgba(255,255,255,.05))` : "";
+}
+function loadCatalog() {
+  get(`${base()}/catalog?t=${tok()}`, (status, text) => {
+    if (status !== 200) return;
+    let c; try { c = JSON.parse(text); } catch { return; }
+    catalog = c; indexCatalog();
+    if (!PANEL) store.set("catalog", { tracks: c.tracks, albums: c.albums, playlists: c.playlists, history: (c.history || []).slice(0, 50) });
+    render(); drawPlayer(); drawSidebar();
+  });
+}
+// The server's own computer: local-only extras (folders, taste, discover, file box…)
+const L = {
+  get: p => fetch(p, { cache: "no-store" }).then(r => r.ok ? r.json() : Promise.reject(r.status)),
+  post: (p, body) => fetch(p, { method: "POST", headers: { "Content-Type": "application/json", "X-Musiplex": "1" }, body: JSON.stringify(body || {}) }).then(r => r.json()),
+};
+function openURL(u) { if (api && api.open_url) api.open_url(u); else if (bridge && bridge.openUrl) bridge.openUrl(u); else window.open(u, "_blank"); }
+
+// ======================================================================= library helpers
+const isAuto = p => (p.subtitle || "").startsWith("auto");
+const myLists = () => (catalog.playlists || []).filter(p => !isAuto(p));
+const playable = id => linked() || !!downloads[id];
+function dedupe(tracks) {
+  if (!settings.hideDupes) return tracks;
+  const seen = new Map(), out = [];
+  const norm = s => (s || "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]/g, "");
+  for (const t of tracks) {
+    const k = norm(t.title) + "|" + norm(t.artist), prev = seen.get(k);
+    if (prev && Math.abs((prev.duration || 0) - (t.duration || 0)) < 3) continue;
+    seen.set(k, t); out.push(t);
+  }
+  return out;
+}
+const songs = () => dedupe((catalog.tracks || []).slice().sort((a, b) => a.title.localeCompare(b.title)));
+function artists() {
+  const m = new Map();
+  for (const t of catalog.tracks || []) { const a = m.get(t.artist) || { name: t.artist, ids: [] }; a.ids.push(t.id); m.set(t.artist, a); }
+  return [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+const matches = q => t => !q || `${t.title} ${t.artist} ${t.album}`.toLowerCase().includes(q);
+
+// ======================================================================= downloads (Android)
+const dlQueue = []; let dlBusy = 0;
+function download(t) {
+  if (!t || downloads[t.id] || progress[t.id] !== undefined || !bridge || !linked()) return;
+  progress[t.id] = 0; dlQueue.push(t); pump(); refreshRow(t.id);
+}
+function pump() {
+  while (dlBusy < 4 && dlQueue.length) {
+    const t = dlQueue.shift(); dlBusy++;
+    bridge.download(t.id, t.ext || "m4a", `${base()}/file/${t.id}.${t.ext || "m4a"}?t=${tok()}`);
+  }
+}
+window.onDownload = (id, f) => {
+  if (f >= 1 || f < 0) { delete progress[id]; dlBusy = Math.max(0, dlBusy - 1); pump(); if (f >= 1) loadDownloads(); else toast("A download didn't finish."); }
+  else progress[id] = f;
+  refreshRow(id); if (id === cur()) drawPlayer();
+};
+function refreshRow(id) { document.querySelectorAll(`.row[data-id="${id}"] .side`).forEach(el => drawSide(el, byId[id])); }
+function syncAll() {
+  const missing = dedupe(catalog.tracks || []).filter(t => !downloads[t.id] && progress[t.id] === undefined);
+  if (!missing.length) return toast("Every song is already on this phone.");
+  missing.forEach(download); toast(`Downloading ${missing.length} song${missing.length === 1 ? "" : "s"}…`);
+}
+
+// ======================================================================= listening (on this device, for offline Surprise)
+const mine = store.get("listening", {});       // id -> {p, s, h[24]}
+function noteListen(id, pos) {
+  const t = byId[id]; if (!t || !t.duration) return;
+  const s = mine[id] || (mine[id] = { p: 0, s: 0, h: Array(24).fill(0) });
+  if (pos >= t.duration * 0.5) { s.p++; s.h[new Date().getHours()]++; } else if (pos < 30 && pos < t.duration * 0.4) s.s++; else return;
+  store.set("listening", mine);
+}
+function offlinePick(avoid) {
+  const ids = Object.keys(downloads).filter(id => byId[id] && !avoid.has(id));
+  if (!ids.length) return null;
+  const hr = new Date().getHours();
+  const w = ids.map(id => { const s = mine[id]; return 0.4 + (s ? (s.p + 1) / (s.p + s.s + 2) + 1.5 * (s.h[hr] / Math.max(1, s.p)) : 0.5); });
+  let r = Math.random() * w.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < ids.length; i++) { r -= w[i]; if (r <= 0) return ids[i]; }
+  return ids[0];
+}
+
+// ======================================================================= offline playback (downloads, no server)
+const offline = {
+  active: false,
+  perform(c) {
+    if (PANEL || !ANDROID) return;
+    const s = state ? { ...state, queue: [...state.queue] } : { queue: [], index: 0, isPlaying: false, position: 0, volume: 1, shuffle: false, repeatMode: "off", crossfade: 0 };
+    s.activeDevice = deviceID; s.fade = 0;
+    const now = () => P().currentTime || 0;
+    let restart = false;
+    switch (c.action) {
+      case "play": { let ids = (c.ids || []).filter(id => downloads[id]); if (!ids.length) return; let i = Math.min(c.index || 0, ids.length - 1);
+        if (s.shuffle) { const first = ids[i]; ids = ids.filter(x => x !== first).sort(() => Math.random() - .5); ids.unshift(first); i = 0; }
+        s.queue = ids; s.index = i; s.isPlaying = true; s.radio = c.text === "surprise" ? "surprise" : null; restart = true; break; }
+      case "surprise": { const first = offlinePick(new Set()); if (!first) return; s.queue = [first]; s.index = 0; s.isPlaying = true; s.radio = "surprise"; restart = true; break; }
+      case "toggle": s.isPlaying = !s.isPlaying; s.position = now(); break;
+      case "pause": s.isPlaying = false; s.position = now(); break;
+      case "next": case "auto":
+        if (s.repeatMode === "one" && c.action === "auto") { restart = true; break; }
+        if (s.radio === "surprise" && s.index >= s.queue.length - 1) { const n = offlinePick(new Set(s.queue.slice(-30))); if (n) s.queue.push(n); }
+        if (s.index < s.queue.length - 1) s.index++; else if (s.repeatMode === "all") s.index = 0; else s.isPlaying = false;
+        if (c.action === "auto") s.fade = s.crossfade || 0;
+        restart = true; break;
+      case "prev": if (now() < 3 && s.index > 0) s.index--; restart = true; break;
+      case "seek": s.position = c.value || 0; P().currentTime = s.position; break;
+      case "jump": s.index = c.index; s.isPlaying = true; restart = true; break;
+      case "shuffle": s.shuffle = !s.shuffle; break;
+      case "repeat": s.repeatMode = { off: "all", all: "one", one: "off" }[s.repeatMode] || "off"; break;
+      case "playNext": s.queue.splice(s.index + 1, 0, ...(c.ids || []).filter(id => downloads[id])); break;
+      case "enqueue": s.queue.push(...(c.ids || []).filter(id => downloads[id])); break;
+      case "volume": s.volume = c.value; break;
+      case "crossfade": s.crossfade = c.value; break;
+      default: return;
+    }
+    if (restart) { s.position = 0; loaded = ""; }
+    this.active = true; drawStatus();
+    setState(s);
+  },
+  stop() { if (this.active) { this.active = false; P().pause(); loaded = ""; drawStatus(); } }
+};
+
+// ======================================================================= the sound (two players, for crossfade)
+const players = [$("a0"), $("a1")]; let pi = 0;
+const P = () => players[pi];
+let loaded = "", sinkId = store.get("sinkId", "");
+const ramps = new Map();
+function ramp(a, to, secs, then) {
+  clearInterval(ramps.get(a));
+  const from = a.volume, steps = Math.max(1, Math.round(secs * 20)); let n = 0;
+  ramps.set(a, setInterval(() => { n++; a.volume = Math.max(0, Math.min(1, from + (to - from) * n / steps)); if (n >= steps) { clearInterval(ramps.get(a)); ramps.delete(a); then && then(); } }, 50));
+}
+players.forEach(a => {
+  a.onended = () => { if (a === P() && (offline.active || !linked())) command("auto"); };
+  a.onerror = () => { if (a === P()) loaded = ""; };
+  if (sinkId && a.setSinkId) a.setSinkId(sinkId).catch(() => {});
+});
+const cur = () => state && state.queue[state.index];
+const here = () => !PANEL && (linked() ? !!state && state.activeDevice === deviceID : offline.active);
+const vol = () => Math.min(1, Math.max(0, state && state.volume != null ? state.volume : 0.8));
+function position() {
+  if (!state) return 0;
+  if (here() && loaded === cur() && P().readyState > 0) return P().currentTime;
+  return (state.position || 0) + (state.isPlaying ? (Date.now() - stateAt) / 1000 : 0);
+}
+let lastCur = null, lastPos = 0;
+function setState(s) {
+  const prev = cur();
+  if (prev && prev !== (s.queue || [])[s.index]) noteListen(prev, lastPos);
+  state = s; stateAt = Date.now();
+  drawPlayer(); syncAudio();
+  document.querySelectorAll(".row[data-id]").forEach(r => { r.classList.toggle("cur", r.dataset.id === cur()); r.classList.toggle("playing", r.dataset.id === cur() && !!state.isPlaying); });
+  drawQueue();
+  if (cur() && state.queue.length && !state.radio) store.set("lastPlay", { ids: state.queue.slice(0, 500), index: state.index });
+  pushNowPlaying(true);
+}
+function syncAudio() {
+  const id = cur(), t = id && byId[id];
+  if (!here() || !id) { players.forEach(a => { if (!a.paused) a.pause(); }); return; }
+  const dl = downloads[id];
+  if (!dl && !linked()) return;
+  if (loaded !== id) {
+    const fade = state.fade || 0, old = P();
+    loaded = id;
+    pi = 1 - pi; const a = P();
+    const at = state.position || 0, wasAt = stateAt;
+    a.src = dl ? dl.url : `${base()}/file/${id}.${(t && t.ext) || "m4a"}?t=${tok()}`;
+    a.volume = fade > 0 && !old.paused ? 0 : vol();
+    a.addEventListener("loadedmetadata", () => { a.currentTime = Math.max(0, at + (state.isPlaying && linked() ? (Date.now() - wasAt) / 1000 : 0)); }, { once: true });
+    if (state.isPlaying) a.play().catch(() => {});
+    if (fade > 0 && !old.paused) { ramp(a, vol(), fade); ramp(old, 0, fade, () => { old.pause(); }); }
+    else { old.pause(); }
+  } else if (linked() && P().readyState > 0) {
+    const want = (state.position || 0) + (state.isPlaying ? (Date.now() - stateAt) / 1000 : 0);
+    if (Math.abs(P().currentTime - want) > 2) P().currentTime = Math.max(0, want);
+  }
+  if (!ramps.has(P())) P().volume = vol();
+  if (state.isPlaying && P().paused) P().play().catch(() => {});
+  if (!state.isPlaying) players.forEach(a => { if (!a.paused) a.pause(); });
+}
+setInterval(() => { if (state && cur()) { lastPos = position(); } }, 1000);
+
+// Native lock-screen player, widgets and notification (Android).
+let npAt = 0;
+function pushNowPlaying(force) {
+  if (!bridge || PANEL) return;
+  if (!force && Date.now() - npAt < 4000) return;
+  npAt = Date.now();
+  const id = cur(), t = id && byId[id];
+  const audible = linked() ? state && state.activeDevice : deviceID;
+  bridge.nowPlaying(JSON.stringify(t ? {
+    on: true, local: here(), title: t.title, artist: t.artist, album: t.album || "", art: artURL(id),
+    duration: t.duration || 0, position: position(), playing: !!(state && state.isPlaying),
+    where: audible === deviceID ? "This phone" : nameOf(audible)
+  } : { on: false }));
+}
+setInterval(() => pushNowPlaying(false), 5000);
+window.remote = (action, value) => {
+  if (!linked() && host && !offline.active && action !== "toggle" && pendingRemote.length < 3) { pendingRemote.push([action, value]); setTimeout(() => { if (pendingRemote.length && !linked()) { const p = pendingRemote.splice(0); offline.active = true; p.forEach(a => window.remote(...a)); } }, 6000); return; }
+  switch (action) {
+    case "surprise": command("surprise"); break;
+    case "continue": continuePlaying(); break;
+    case "toggle": if (here()) { state && state.isPlaying ? P().pause() : P().play().catch(() => {}); } command("toggle"); break;
+    case "next": command("next"); break;
+    case "prev": command("prev"); break;
+    case "seek": command("seek", { value: +value || 0 }); break;
+    case "pause": command("pause"); break;
+    case "open": break;
+  }
+};
+function continuePlaying() {
+  const last = store.get("lastPlay", null);
+  if (state && cur() && !state.isPlaying) return command("toggle");
+  if (last && last.ids.length) { const ids = last.ids.filter(playable); if (ids.length) return command("play", { ids, index: Math.max(0, ids.indexOf(last.ids[last.index])) }); }
+  command("surprise");
+}
+
+// ======================================================================= devices
+const deviceIcon = d => d.id === "mac" || d.kind === "mac" || d.kind === "pc" ? "laptop" : "phone";
+function deviceList() {
+  const list = [];
+  if (state && (state.activeDevice === "mac" || !noSpeaker)) list.push({ id: "mac", name: "Mac", kind: "mac" });
+  devices.filter(d => d.id !== "mac").forEach(d => list.push(d));
+  if (!PANEL && !list.some(d => d.id === deviceID)) list.push({ id: deviceID, name: deviceName, kind: KIND });
+  return list;
+}
+const nameOf = id => id === deviceID ? `this ${myWord}` : id === "mac" ? "Mac" : (devices.find(d => d.id === id) || {}).name || "another device";
+function pickDevice(id) { if (id === deviceID) P().play().catch(() => {}); command("device", { text: id }); }
+// This computer's outputs (speakers, Bluetooth headphones/speakers) for the window's own sound.
+async function outputs() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return [];
+  try { return (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "audiooutput" && d.deviceId !== "communications"); } catch { return []; }
+}
+async function setOutput(id) {
+  sinkId = id; store.set("sinkId", id);
+  for (const a of players) if (a.setSinkId) await a.setSinkId(id).catch(() => {});
+  if (state && state.activeDevice !== deviceID) pickDevice(deviceID);
+  drawPlayer();
+}
+async function speakerMenu(x, y) {
+  const items = [];
+  if (!ANDROID && !PANEL) {
+    let outs = await outputs();
+    items.push({ head: "This computer" });
+    if (outs.length && !outs.some(o => o.label)) items.push({ icon: "speaker", label: "Show Bluetooth and other speakers…", fn: async () => { try { const s = await navigator.mediaDevices.getUserMedia({ audio: true }); s.getTracks().forEach(t => t.stop()); } catch {} speakerMenu(x, y); } });
+    (outs.length ? outs : [{ deviceId: "", label: "Speakers" }]).forEach(o => {
+      const label = o.deviceId === "default" ? `Default (${(o.label || "").replace(/^Default - /, "") || "speakers"})` : o.label || "Speakers";
+      const sel = state && state.activeDevice === deviceID && (sinkId || "default") === (o.deviceId || "default");
+      items.push({ icon: sel ? "tick" : /bluetooth|airpods|buds|head/i.test(label) ? "head" : "speaker", label, fn: () => setOutput(o.deviceId === "default" ? "" : o.deviceId) });
+    });
+  }
+  const others = deviceList().filter(d => ANDROID || PANEL || d.id !== deviceID);
+  if (others.length) items.push({ head: ANDROID ? "Play on" : "Other devices" });
+  others.forEach(d => items.push({ icon: state && state.activeDevice === d.id ? "tick" : deviceIcon(d), label: d.id === deviceID ? `This ${myWord}` : d.name, fn: () => pickDevice(d.id) }));
+  if (!others.length && !ANDROID) items.push({ label: "Open Musiplex on a phone to play there", fn: () => {} });
+  showMenu(items, "Play on", x, y);
+}
+
+// ======================================================================= menus & sheets
+function showMenu(items, title, x, y) {
+  if (wide() || MODE !== "full") {
+    const p = $("pop"); p.innerHTML = "";
+    items.forEach(it => {
+      if (it.head) return p.appendChild(h(`<div class="h">${esc(it.head)}</div>`));
+      if (it.sep) return p.appendChild(document.createElement("hr"));
+      const b = h(`<button class="${it.cls || ""}">${it.icon ? icon(it.icon) : ""}<span>${esc(it.label)}</span></button>`);
+      b.onclick = e => { e.stopPropagation(); hidePop(); it.fn(); };
+      p.appendChild(b);
+    });
+    p.classList.remove("hidden");
+    const r = p.getBoundingClientRect();
+    p.style.left = Math.max(6, Math.min(x, innerWidth - r.width - 6)) + "px";
+    p.style.top = Math.max(6, Math.min(y, innerHeight - r.height - 6)) + "px";
+    return;
+  }
+  const box = sheet("menu", `<h3 style="font-size:16px">${esc(title || "")}</h3><div class="menu"></div>`);
+  const m = box.querySelector(".menu");
+  items.forEach(it => {
+    if (it.head) return m.appendChild(h(`<div class="dim" style="padding:10px 18px 2px;font-size:12px;font-weight:600">${esc(it.head)}</div>`));
+    if (it.sep) return;
+    const b = h(`<button class="${it.cls || ""}">${it.icon ? icon(it.icon) : ""}${esc(it.label)}</button>`);
+    b.onclick = () => { closeSheet(); it.fn(); };
+    m.appendChild(b);
+  });
+}
+function hidePop() { $("pop").classList.add("hidden"); }
+addEventListener("click", e => { if (!e.target.closest("#pop")) hidePop(); });
+addEventListener("keydown", e => { if (e.key === "Escape") { hidePop(); closeSheet(); } });
+let sheetName = "";
+function sheet(name, html) {
+  sheetName = name;
+  const box = $("sheetbox"); box.innerHTML = html; $("sheet").classList.add("open");
+  box.querySelectorAll("[data-close]").forEach(b => b.onclick = () => closeSheet());
+  return box;
+}
+function closeSheet(name) { if (name && sheetName !== name) return; $("sheet").classList.remove("open"); sheetName = ""; $("pv").pause(); }
+$("sheet").addEventListener("click", e => { if (e.target === $("sheet")) closeSheet(); });
+function ask(title, value) { return new Promise(ok => {
+  const box = sheet("ask", `<h3>${esc(title)}</h3><div class="pad"><input id="askv"><div class="btns" style="padding:0"><button class="btn" data-close>Cancel</button><button class="btn primary" id="askok">OK</button></div></div>`);
+  const i = box.querySelector("#askv"); i.value = value || ""; setTimeout(() => { i.focus(); i.select(); }, 250);
+  const done = () => { closeSheet(); ok(i.value.trim()); };
+  box.querySelector("#askok").onclick = done; i.onkeydown = e => { if (e.key === "Enter") done(); };
+}); }
+
+// ======================================================================= song actions
+function songMenu(t, playlistID, x, y) {
+  const items = [];
+  if (linked()) {
+    items.push({ icon: "next1", label: "Play Next", fn: () => command("playNext", { ids: [t.id] }) });
+    items.push({ icon: "queue", label: "Add to Queue", fn: () => command("enqueue", { ids: [t.id] }) });
+    items.push({ sep: true }, { head: "Add to playlist" });
+    myLists().filter(p => p.id !== playlistID).slice(0, 15).forEach(p => items.push({ icon: "plus", label: p.name, fn: () => { addTo(p.id, [t.id]); toast(`Added to ${p.name}`); } }));
+    items.push({ icon: "plus", label: "New Playlist…", fn: async () => { const n = await ask("New playlist", "New Playlist"); if (n) newPlaylist(n, [t.id]); } });
+    if (playlistID) items.push({ sep: true }, { icon: "minus", label: "Remove from Playlist", cls: "red", fn: () => send({ type: "playlist", text: playlistID, removeIDs: [t.id] }) });
+  }
+  if (downloads[t.id]) items.push({ icon: "trash", label: "Remove Download", cls: "red", fn: () => { bridge.removeDownload(t.id); loadDownloads(); render(); } });
+  else if (linked() && bridge) items.push({ icon: "down", label: "Download", fn: () => download(t) });
+  if (items.length) showMenu(items, `${t.title} — ${t.artist}`, x, y);
+}
+function addTo(pid, ids) { send({ type: "playlist", text: pid, ids }); if (local) { const fl = ids.filter(i => byId[i] && byId[i].floater); if (fl.length) L.post("/local/floating", { settle: fl }).then(r => { local.settled = r.settled; render(); }); } }
+function newPlaylist(name, ids) { send({ type: "playlist", name: name || "New Playlist", ids: ids || [] }); toast("Playlist created"); }
+function playList(list, i) { const ids = list.filter(playable); command("play", { ids, index: Math.max(0, ids.indexOf(list[i])) }); }
+function shuffleList(ids) { if (!ids.length) return; if (!(state && state.shuffle)) command("shuffle"); playList(ids, Math.floor(Math.random() * ids.length)); }
+async function listMenu(p, x, y) {
+  showMenu([
+    { icon: "play", label: "Play", fn: () => playList(p.trackIDs.filter(i => byId[i]), 0) },
+    { icon: "shuffle", label: "Shuffle", fn: () => shuffleList(p.trackIDs.filter(i => byId[i])) },
+    { sep: true },
+    { icon: "pen", label: "Rename…", fn: async () => { const n = await ask("Rename playlist", p.name); if (n && n !== p.name) send({ type: "playlist", text: p.id, name: n }); } },
+    { icon: "trash", label: "Delete Playlist", cls: "red", fn: () => { if (confirm(`Delete “${p.name}”? You can undo it from the version history.`)) { send({ type: "deletePlaylist", text: p.id }); if (route.v === "list" && route.id === p.id) go({ v: wide() ? "home" : "playlists" }); } } },
+  ], p.name, x, y);
+}
+
+// ======================================================================= rows & tiles
+function trackRow(t, list, i, playlistID) {
+  const isCur = cur() === t.id;
+  const b = h(`<div class="row${isCur ? " cur" : ""}${isCur && state && state.isPlaying ? " playing" : ""}" data-id="${t.id}"><div class="art"></div><div class="t"><div class="title"><span class="wave">▮▮▮</span>${esc(t.title)}</div><div class="sub">${esc(t.artist)}</div></div><div class="al">${esc(t.album || "")}</div><div class="du">${fmt(t.duration)}</div><button class="side"></button></div>`);
+  b.style.opacity = playable(t.id) ? 1 : .4;
+  setArt(b.querySelector(".art"), t.id);
+  drawSide(b.querySelector(".side"), t);
+  b.onclick = e => {
+    if (e.target.closest(".side")) return;
+    if (b.skip) { b.skip = false; return; }
+    if (!playable(t.id)) return toast("Connect to your server to play this one.");
+    playList(list, i);
+  };
+  let press;
+  b.addEventListener("touchstart", e => { const p = e.touches[0]; press = setTimeout(() => { b.skip = true; songMenu(t, playlistID, p.clientX, p.clientY); }, 480); }, { passive: true });
+  ["touchend", "touchmove", "touchcancel"].forEach(ev => b.addEventListener(ev, () => clearTimeout(press), { passive: true }));
+  b.oncontextmenu = e => { e.preventDefault(); if (!("ontouchstart" in window) || wide()) songMenu(t, playlistID, e.clientX, e.clientY); };
+  if (!ANDROID) { b.draggable = true; b.ondragstart = e => e.dataTransfer.setData("text/musiplex-ids", JSON.stringify([t.id])); }
+  return b;
+}
+function drawSide(el, t) {
+  el.className = "side"; el.onclick = null; el.innerHTML = "";
+  if (!t) return;
+  if (!ANDROID) { el.innerHTML = icon("plus"); el.title = "More"; el.onclick = e => { e.stopPropagation(); songMenu(t, el.closest("[data-pl]") ? el.closest("[data-pl]").dataset.pl : null, e.clientX, e.clientY); }; return; }
+  if (downloads[t.id]) { el.classList.add("ok"); el.innerHTML = icon("check"); }
+  else if (progress[t.id] !== undefined) el.innerHTML = `<div class="ring" style="--p:${Math.max(3, progress[t.id] * 100)}"></div>`;
+  else if (linked()) { el.innerHTML = icon("down"); el.onclick = e => { e.stopPropagation(); download(t); }; }
+}
+function rows(container, ids, playlistID) {
+  const wrap = document.createElement("div"); if (playlistID) wrap.dataset.pl = playlistID; container.appendChild(wrap);
+  let n = 0;
+  const chunk = () => {
+    if (!wrap.isConnected && n) return;
+    const end = Math.min(ids.length, n + 120);
+    for (; n < end; n++) { const t = byId[ids[n]]; if (t) wrap.appendChild(trackRow(t, ids, n, playlistID)); }
+    if (n < ids.length) requestAnimationFrame(chunk);
+  };
+  chunk();
+}
+function empty(c, ic, text) { c.insertAdjacentHTML("beforeend", `<div class="empty">${icon(ic)}${esc(text)}</div>`); }
+function tile(name, sub, artId, onClick, round, onMenu) {
+  const b = h(`<button class="tile${round ? " artist" : ""}"><div class="art${round ? " round" : ""}"></div><div class="n">${esc(name)}</div><div class="s">${esc(sub || "")}</div></button>`);
+  setArt(b.querySelector(".art"), artId); b.onclick = onClick;
+  if (onMenu) b.oncontextmenu = e => { e.preventDefault(); onMenu(e.clientX, e.clientY); };
+  return b;
+}
+
+// ======================================================================= routes (both layouts)
+let route = { v: wide() ? "home" : "songs" };
+const stack = [];
+function go(r, push) { if (push) stack.push(route); else stack.length = 0; route = r; render(); const sc = $("main") || $("phone"); if (sc) sc.scrollTop = 0; drawSidebar(); }
+window.goBack = () => {
+  if ($("sheet").classList.contains("open")) { closeSheet(); return true; }
+  if (!$("pop").classList.contains("hidden")) { hidePop(); return true; }
+  if ($("full") && $("full").classList.contains("open")) { expand(false); return true; }
+  if (stack.length) { route = stack.pop(); render(); drawSidebar(); return true; }
+  return false;
+};
+let query = "";
+
+function render() {
+  if (MODE === "mini") return drawMiniQueue();
+  if (MODE === "notch") return drawNotch();
+  const c = $("content"); if (!c) return;
+  c.innerHTML = "";
+  if ($("phone")) {
+    const tabbed = ["songs", "albums", "playlists", "offline", "history"].includes(route.v);
+    $("seg").classList.toggle("hidden", !tabbed);
+    $("searchbox").classList.toggle("hidden", !tabbed || route.v === "playlists" || route.v === "history");
+    document.querySelectorAll("#seg button").forEach(x => x.classList.toggle("on", x.dataset.tab === route.v));
+  }
+  const q = query.trim().toLowerCase();
+  if (wide() && q) return viewSearch(c, q);
+  const V = { home: viewHome, songs: viewSongs, albums: viewAlbums, artists: viewArtists, playlists: viewPlaylists, offline: viewOffline,
+    history: viewHistory, settings: viewSettings, list: viewList, surprise: viewSurprise }[route.v] || viewSongs;
+  V(c, q);
+}
+function title(c, t, n) { if (wide()) c.appendChild(h(`<h1>${esc(t)}${n != null ? ` <small>${n}</small>` : ""}</h1>`)); }
+function backButton(c, label) {
+  const b = h(`<button class="back">${icon("back")} ${esc(label)}</button>`); b.onclick = () => window.goBack(); c.appendChild(b);
+}
+function forYouCards(c) {
+  const guess = (catalog.playlists || []).find(p => p.id === "auto-guess");
+  const cards = h(`<div class="cards"><button class="card">${icon("sparkles")}<b>Surprise</b><small>Picks as it plays</small></button>${guess ? `<button class="card">${icon("wand")}<b>Guess</b><small>${esc(moment(guess))}</small></button>` : ""}</div>`);
+  cards.children[0].onclick = () => { if (!linked() && !Object.keys(downloads).length) return toast("Connect to your server first."); command("surprise"); if (!wide()) setTimeout(() => expand(true), 300); };
+  if (guess) cards.children[1].onclick = () => go({ v: "list", id: "auto-guess", kind: "Guess" }, true);
+  c.appendChild(cards);
+}
+const moment = g => (g.subtitle || "").replace("auto · ", "").replace("auto", "").replace(/^./, s => s.toUpperCase()) || "For right now";
+function viewHome(c) {
+  const hr = new Date().getHours();
+  c.appendChild(h(`<h1>${hr < 5 ? "Good night" : hr < 12 ? "Good morning" : hr < 17 ? "Good afternoon" : "Good evening"}</h1>`));
+  forYouCards(c);
+  const recent = (catalog.tracks || []).slice().sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+  const albums = []; const seen = new Set();
+  for (const t of recent) { const a = (catalog.albums || []).find(x => x.trackIDs.includes(t.id)); if (a && !seen.has(a.id)) { seen.add(a.id); albums.push(a); } if (albums.length >= 12) break; }
+  if (albums.length) {
+    c.appendChild(h(`<div class="sec" style="padding:14px 16px 8px">RECENTLY ADDED</div>`));
+    const g = h(`<div class="grid"></div>`); albums.forEach(a => g.appendChild(tile(a.name, a.subtitle, a.trackIDs[0], () => go({ v: "list", id: a.id, kind: "Album" }, true)))); c.appendChild(g);
+  }
+  const lists = myLists();
+  if (lists.length) {
+    c.appendChild(h(`<div class="sec" style="padding:22px 16px 8px">YOUR PLAYLISTS</div>`));
+    const g = h(`<div class="grid"></div>`); lists.slice(0, 12).forEach(p => g.appendChild(tile(p.name, `${p.trackIDs.length} songs`, p.trackIDs[0], () => go({ v: "list", id: p.id, kind: "Playlist" }, true), false, (x, y) => listMenu(p, x, y)))); c.appendChild(g);
+  }
+  if (!(catalog.tracks || []).length) empty(c, "note", linked() ? "No songs yet. Add a music folder in Settings, or put songs in Documents › Songs." : "Connecting to your music…");
+}
+function viewSongs(c, q) {
+  const all = songs();
+  title(c, "Songs", all.length);
+  if (wide()) { const b = h(`<div class="btns"><button class="btn small">${icon("shuffle")} Shuffle All</button></div>`); b.firstChild.onclick = () => shuffleList(all.map(t => t.id)); c.appendChild(b); }
+  const ids = all.filter(matches(q)).map(t => t.id);
+  if (!ids.length) return empty(c, "search", (catalog.tracks || []).length ? "No songs match." : linked() ? "No songs yet." : "Connect to your server to see your songs.");
+  rows(c, ids);
+}
+function viewAlbums(c, q) {
+  title(c, "Albums", (catalog.albums || []).length);
+  const list = (catalog.albums || []).filter(a => !q || `${a.name} ${a.subtitle || ""}`.toLowerCase().includes(q));
+  if (!list.length) return empty(c, "stack", "No albums.");
+  const g = h(`<div class="grid"></div>`);
+  list.forEach(a => g.appendChild(tile(a.name, a.subtitle, a.trackIDs[0], () => go({ v: "list", id: a.id, kind: "Album" }, true))));
+  c.appendChild(g);
+}
+function viewArtists(c, q) {
+  const list = artists().filter(a => !q || a.name.toLowerCase().includes(q));
+  title(c, "Artists", list.length);
+  if (!list.length) return empty(c, "mic", "No artists.");
+  const g = h(`<div class="grid"></div>`);
+  list.forEach(a => g.appendChild(tile(a.name, `${a.ids.length} song${a.ids.length === 1 ? "" : "s"}`, a.ids[0], () => go({ v: "list", id: a.name, kind: "Artist" }, true), true)));
+  c.appendChild(g);
+}
+function viewPlaylists(c) {
+  forYouCards(c);
+  if (linked()) {
+    const b = h(`<div class="btns"><button class="btn">${icon("plus")} New Playlist</button><button class="btn">${icon("list")} Rearrange</button></div>`);
+    b.children[0].onclick = async () => { const n = await ask("New playlist", "New Playlist"); if (n) newPlaylist(n); };
+    b.children[1].onclick = rearrange;
+    c.appendChild(b);
+  }
+  const lists = myLists();
+  if (!lists.length) return empty(c, "list", "No playlists yet.");
+  lists.forEach(p => {
+    const b = h(`<button class="row"><div class="art"></div><div class="t"><div>${esc(p.name)}</div><div class="sub">${p.trackIDs.length} song${p.trackIDs.length === 1 ? "" : "s"}</div></div></button>`);
+    setArt(b.querySelector(".art"), p.trackIDs[0]);
+    b.onclick = () => go({ v: "list", id: p.id, kind: "Playlist" }, true);
+    let press; b.addEventListener("touchstart", e => { const t = e.touches[0]; press = setTimeout(() => listMenu(p, t.clientX, t.clientY), 480); }, { passive: true });
+    ["touchend", "touchmove"].forEach(ev => b.addEventListener(ev, () => clearTimeout(press), { passive: true }));
+    c.appendChild(b);
+  });
+}
+function rearrange() {
+  let order = myLists().map(p => p.id);
+  const box = sheet("rearrange", `<h3>Rearrange playlists <button class="x" data-close>Done</button></h3><div id="rl"></div><div class="note" style="padding:8px 16px">Saved on your server and used on every device.</div>`);
+  const draw = () => {
+    const l = box.querySelector("#rl"); l.innerHTML = "";
+    order.forEach((id, i) => {
+      const p = myLists().find(x => x.id === id); if (!p) return;
+      const r = h(`<div class="row"><div class="t"><div>${esc(p.name)}</div></div><button class="ib">▲</button><button class="ib">▼</button></div>`);
+      r.children[1].onclick = () => { if (i > 0) { [order[i - 1], order[i]] = [order[i], order[i - 1]]; send({ type: "reorderPlaylists", ids: order }); draw(); } };
+      r.children[2].onclick = () => { if (i < order.length - 1) { [order[i + 1], order[i]] = [order[i], order[i + 1]]; send({ type: "reorderPlaylists", ids: order }); draw(); } };
+      l.appendChild(r);
+    });
+  };
+  draw();
+}
+function viewOffline(c, q) {
+  const count = Object.keys(downloads).length;
+  const ids = songs().filter(t => downloads[t.id]).filter(matches(q)).map(t => t.id);
+  const total = Object.values(downloads).reduce((a, d) => a + (d.size || 0), 0);
+  if (count) {
+    const bar = h(`<div class="btns" style="align-items:center"><span class="dim" style="flex:1;font-size:13px">${count} songs · ${(total / 1e6).toFixed(0)} MB on this phone</span>${linked() ? `<button class="pill" style="background:rgba(163,138,255,.18);color:var(--accent)" id="syncall">${icon("sync")} Sync</button>` : ""}<button class="pill" style="background:rgba(255,69,58,.15);color:var(--red)" id="delall">${icon("trash")} Delete All</button></div>`);
+    c.appendChild(bar);
+    if ($("syncall")) $("syncall").onclick = syncAll;
+    $("delall").onclick = () => { if (confirm(`Delete all ${count} downloaded songs from this phone? They stay on your server.`)) { Object.keys(downloads).forEach(id => bridge.removeDownload(id)); loadDownloads(); render(); } };
+  } else if (linked() && bridge) {
+    const bar = h(`<div class="btns"><button class="btn primary">${icon("down")} Download every song</button></div>`); bar.firstChild.onclick = syncAll; c.appendChild(bar);
+  }
+  if (!ids.length) return empty(c, "down", count ? "No downloads match." : "Songs you download play here with no connection.");
+  rows(c, ids);
+}
+function viewHistory(c) {
+  title(c, "Playlist History");
+  const hist = catalog.history || [];
+  if (!hist.length) return empty(c, "clock", "Every playlist change gets a version here, with the device it came from.");
+  hist.forEach(v => {
+    const secs = v.date < 1e9 ? v.date + 978307200 : v.date;
+    const when = new Date(secs * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    const lines = (v.changes || []).map(ch => {
+      const n = (ch.songs || []).length;
+      const what = { added: `Added ${n} song${n === 1 ? "" : "s"} to`, removed: `Removed ${n} song${n === 1 ? "" : "s"} from`, created: "Created", deleted: "Deleted", renamed: "Renamed" }[ch.kind] || ch.kind;
+      return `<div class="ch">${esc(what)} “${esc(ch.playlist)}”${n && n <= 3 ? ": " + esc(ch.songs.join(", ")) : ""}</div>`;
+    }).join("");
+    const d = h(`<div class="hist"><div class="t"><div><b>1.${v.number}</b><span class="dim" style="font-size:13px">${esc(when)} · ${esc(v.source || "")}</span></div>${lines}</div>${linked() ? `<button class="btn small">Revert</button>` : ""}</div>`);
+    const rb = d.querySelector("button");
+    if (rb) rb.onclick = () => { if (confirm(`Undo version 1.${v.number}? This makes a new version, so you can undo the undo.`)) send({ type: "revert", text: String(v.number) }); };
+    c.appendChild(d);
+  });
+}
+function viewSurprise(c) {
+  c.appendChild(h(`<h1>Surprise</h1>`));
+  c.appendChild(h(`<div class="dim" style="margin:0 16px 16px;max-width:560px">A playlist with no songs: press play and it picks the next song as it goes — songs you often play after the current one, the same genre or artist, what you like at this time of day, a little discovery, and never something you heard in the last few hours. It learns only from your plays and skips, on your own computer.</div>`));
+  const b = h(`<div class="btns"><button class="btn primary" style="flex:none">${icon("sparkles")} Start Surprise</button></div>`); b.firstChild.onclick = () => command("surprise"); c.appendChild(b);
+}
+function viewList(c) {
+  let p, kind = route.kind;
+  if (kind === "Album") p = (catalog.albums || []).find(a => a.id === route.id);
+  else if (kind === "Artist") { const a = artists().find(x => x.name === route.id); p = a && { id: a.name, name: a.name, subtitle: "Artist", trackIDs: a.ids }; }
+  else p = (catalog.playlists || []).find(x => x.id === route.id);
+  if (!p) return empty(c, "list", "This list is gone.");
+  if (stack.length || !wide()) backButton(c, stack.length ? "Back" : "Playlists");
+  const ids = dedupe(p.trackIDs.map(i => byId[i]).filter(Boolean)).map(t => t.id);
+  const editable = kind === "Playlist" && !isAuto(p);
+  const total = ids.reduce((a, i) => a + (byId[i].duration || 0), 0);
+  const head = h(`<div class="listhead"><div class="art${kind === "Artist" ? " round" : ""}"></div><div><div class="dim" style="font-size:12px;font-weight:600;letter-spacing:.06em">${esc(kind === "Guess" ? "GUESS · MADE FOR THIS MOMENT" : kind.toUpperCase())}</div><h2>${esc(p.name)}</h2><div class="dim">${esc(kind === "Album" ? p.subtitle || "" : kind === "Guess" ? moment(p) : "")} ${ids.length} songs · ${Math.round(total / 60)} min</div></div></div>`);
+  setArt(head.querySelector(".art"), ids[0]);
+  c.appendChild(head);
+  const b = h(`<div class="btns"><button class="btn primary">${icon("play")} Play</button><button class="btn">${icon("shuffle")} Shuffle</button>${editable ? `<button class="btn" style="flex:none">${icon("pen")}</button>` : ""}</div>`);
+  b.children[0].onclick = () => ids.length && playList(ids, 0);
+  b.children[1].onclick = () => shuffleList(ids);
+  if (editable) b.children[2].onclick = e => listMenu(p, e.clientX, e.clientY);
+  c.appendChild(b);
+  if (!ids.length) return empty(c, "list", editable ? "Add songs with + or by dragging them onto the playlist in the sidebar." : "No songs here yet.");
+  rows(c, ids, editable ? p.id : null);
+}
+function viewSearch(c, q) {
+  c.appendChild(h(`<h1>Results for “${esc(query)}”</h1>`));
+  const ids = songs().filter(matches(q)).map(t => t.id);
+  const al = (catalog.albums || []).filter(a => a.name.toLowerCase().includes(q)).slice(0, 12);
+  const ar = artists().filter(a => a.name.toLowerCase().includes(q)).slice(0, 12);
+  if (ar.length) { c.appendChild(h(`<div class="sec" style="padding:4px 16px 8px">ARTISTS</div>`)); const g = h(`<div class="grid"></div>`); ar.forEach(a => g.appendChild(tile(a.name, `${a.ids.length} songs`, a.ids[0], () => go({ v: "list", id: a.name, kind: "Artist" }, true), true))); c.appendChild(g); }
+  if (al.length) { c.appendChild(h(`<div class="sec" style="padding:18px 16px 8px">ALBUMS</div>`)); const g = h(`<div class="grid"></div>`); al.forEach(a => g.appendChild(tile(a.name, a.subtitle, a.trackIDs[0], () => go({ v: "list", id: a.id, kind: "Album" }, true)))); c.appendChild(g); }
+  c.appendChild(h(`<div class="sec" style="padding:18px 16px 8px">SONGS</div>`));
+  if (!ids.length) return empty(c, "search", "No songs match.");
+  rows(c, ids.slice(0, 300));
+}
+
+// ======================================================================= settings
+function card(c, ic, t) { const d = h(`<div class="setcard"><h3>${icon(ic)}${esc(t)}</h3></div>`); c.appendChild(d); return d; }
+function toggleRow(label, on, fn, note) {
+  const b = h(`<div><button class="toggle${on ? " yes" : ""}"><span>${esc(label)}</span><i></i></button>${note ? `<div class="note">${esc(note)}</div>` : ""}</div>`);
+  b.firstChild.onclick = () => { const v = !b.firstChild.classList.contains("yes"); b.firstChild.classList.toggle("yes", v); fn(v); };
+  return b;
+}
+function crossfadePills(container) {
+  const p = h(`<div class="pills"></div>`);
+  [0, 2, 4, 6, 8, 12].forEach(v => { const b = h(`<button class="${(state && state.crossfade || 0) === v ? "on" : ""}">${v ? v + "s" : "Off"}</button>`); b.onclick = () => { command("crossfade", { value: v }); setTimeout(render, 300); }; p.appendChild(b); });
+  container.appendChild(p);
+}
+function viewSettings(c) {
+  if (!wide()) backButton(c, "Back");
+  c.appendChild(h(`<h1>Settings</h1>`));
+  // Server
+  const s = card(c, "laptop", local ? "Server" : "Connection");
+  if (local) {
+    s.appendChild(h(`<div><div class="kv"><span>Name</span><span>${esc(local.name)}</span></div>
+      <div class="kv"><span>Pairing PIN</span><span><code id="pinv">••••••</code> <button class="btn small" id="pinb">Show</button></span></div>
+      <div class="kv"><span>Home network</span><code>${esc(local.lan || "—")}</code></div>
+      <div class="kv"><span>Tailscale (from anywhere)</span><code>${esc(local.tailscale || "off")}</code></div>
+      <div class="kv"><span>Songs</span><span>${(catalog.tracks || []).length}</span></div>
+      <div class="note">Phones find this computer on the same Wi‑Fi and ask for the PIN once. Away from home, use the Tailscale address. The PIN and key were made on this computer and never leave it except to devices you pair.</div></div>`));
+    s.querySelector("#pinb").onclick = e => { const v = s.querySelector("#pinv"); const show = v.textContent.startsWith("•"); v.textContent = show ? local.pin : "••••••"; e.target.textContent = show ? "Hide" : "Show"; };
+  } else {
+    s.appendChild(h(`<div><div class="kv"><span>Server</span><span><span class="ring2" style="background:${linked() ? "var(--green)" : "#8e8e93"}"></span> ${esc(linked() ? serverName : offline.active ? "Offline" : "Not connected")}</span></div><div class="kv"><span>Address</span><code>${esc(host || "—")}</code></div></div>`));
+    const b = h(`<div class="btns" style="padding:8px 0 0"><button class="btn small">Change Server</button></div>`); b.firstChild.onclick = () => openLink(); s.appendChild(b);
+  }
+  const dl = deviceList();
+  if (linked()) {
+    s.appendChild(h(`<div class="kv" style="margin-top:6px"><span>Devices connected</span><span></span></div>`));
+    dl.forEach(d => s.appendChild(h(`<div class="kv" style="padding:2px 0 2px 10px"><span>${icon(deviceIcon(d))} ${esc(d.id === deviceID ? `This ${myWord}` : d.name)}</span><span>${state && state.activeDevice === d.id ? '<span class="grad" style="font-weight:600">Playing</span>' : ""}</span></div>`)));
+  }
+  // Playback
+  const pb = card(c, "speaker", "Playback");
+  pb.appendChild(h(`<div class="kv"><span>Crossfade</span><span></span></div>`)); crossfadePills(pb);
+  pb.appendChild(toggleRow("Hide duplicate songs", settings.hideDupes, v => { settings.hideDupes = v; saveSettings(); }, "Same title and artist, about the same length: one copy is shown."));
+  if (ANDROID) pb.appendChild(h(`<div class="note">Keeps playing with the screen off. Controls are on the lock screen, in the notification and in the Musiplex widgets.</div>`));
+  // Music folders (this computer)
+  if (local) {
+    const f = card(c, "folder", "Music Folders");
+    const list = h(`<div></div>`); f.appendChild(list);
+    const drawF = () => L.get("/local/folders").then(r => {
+      list.innerHTML = "";
+      r.defaults.forEach(p => list.appendChild(h(`<div class="kv"><code>${esc(p)}</code><span class="dim">always</span></div>`)));
+      r.folders.forEach(p => { const row = h(`<div class="kv"><code>${esc(p)}</code><button class="btn small red">Remove</button></div>`); row.querySelector("button").onclick = () => L.post("/local/folders", { remove: p }).then(drawF); list.appendChild(row); });
+    });
+    drawF();
+    const add = h(`<div class="btns" style="padding:8px 0 0"><button class="btn small">${icon("plus")} Import Folder…</button><button class="btn small">${icon("folder")} Open Floaters</button></div>`);
+    add.children[0].onclick = importFolder; add.children[1].onclick = () => L.post("/local/open", { what: "floaters" });
+    f.appendChild(add);
+    f.appendChild(h(`<div class="note">Your Music folder and Documents › Songs are always included. Drop files in Documents › Songs › Floaters and they show up in Floating within seconds.</div>`));
+    // Floating
+    const fl = card(c, "float", "Floating");
+    const settled = new Set(local.settled || []);
+    const fids = (catalog.tracks || []).filter(t => t.floater && !settled.has(t.id)).sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0)).map(t => t.id);
+    if (!fids.length) fl.appendChild(h(`<div class="note">Nothing floating. New songs in Floaters appear here until you move them to a playlist.</div>`));
+    else {
+      fl.appendChild(h(`<div class="note" style="margin-bottom:6px">${fids.length} song${fids.length === 1 ? "" : "s"} · use + → a playlist to move one; it leaves Floating.</div>`));
+      const box = h(`<div style="margin:0 -16px"></div>`); fl.appendChild(box); rows(box, fids);
+    }
+    // Your Taste
+    const ta = card(c, "heart", "Your Taste");
+    ta.appendChild(h(`<div class="note">Loading…</div>`));
+    L.get("/local/taste").then(t => {
+      local.settled = t.settled; ta.innerHTML = `<h3>${icon("heart")}Your Taste</h3>`;
+      if (!t.genres.length) { ta.appendChild(h(`<div class="note">Your songs have no genre tags yet.</div>`)); return; }
+      ta.appendChild(h(`<div class="note" style="margin-bottom:8px">From ${t.plays} plays on this computer. For each genre: make a playlist from your library, or discover new songs (Apple's free public search; only the genre and artist names are sent).</div>`));
+      t.genres.forEach(g => {
+        const r = h(`<div class="kv" style="align-items:center"><span style="color:#fff">${esc(g.name)} <span class="dim">· ${g.songs} songs${g.plays ? ` · ${g.plays} plays` : ""}</span></span><span style="display:flex;gap:6px"><button class="btn small">Playlist</button><button class="btn small">Discover</button></span></div>`);
+        const [pl, ds] = r.querySelectorAll("button");
+        pl.onclick = () => { const ids = (catalog.tracks || []).filter(x => x.genre === g.name).map(x => x.id); newPlaylist(`${g.name} Mix`, ids); };
+        ds.onclick = () => discover(g.name);
+        ta.appendChild(r);
+      });
+      if (t.suggested.length) { ta.appendChild(h(`<div class="kv" style="margin-top:8px"><span>Suggested for you · in your library, not played yet</span><span></span></div>`)); const box = h(`<div style="margin:0 -16px"></div>`); ta.appendChild(box); rows(box, t.suggested.filter(i => byId[i])); }
+    }).catch(() => { ta.querySelector(".note").textContent = "Couldn't load."; });
+  }
+  // History (desktop: inside Settings like the Mac)
+  if (wide()) { const hc = card(c, "clock", "Version History"); const box = h(`<div style="margin:0 -16px;max-height:420px;overflow-y:auto"></div>`); hc.appendChild(box); viewHistory(box); box.querySelector("h1") && box.querySelector("h1").remove(); }
+  // Windows app
+  if (api) {
+    const n = card(c, "mini", "Notch, Mini Player & Startup");
+    api.get_prefs().then(p => {
+      n.appendChild(toggleRow("Show the notch", p.notch, v => api.set_pref("notch", v), "A slim bar at the top of the screen. Hover over it for music, files, clipboard, notes, currency and battery."));
+      n.appendChild(toggleRow("Hide the notch when nothing is playing", settings.notchIdle, v => { settings.notchIdle = v; saveSettings(); }));
+      n.appendChild(toggleRow("Show battery in the notch", settings.notchBattery, v => { settings.notchBattery = v; saveSettings(); }));
+      n.appendChild(toggleRow("Start Musiplex when Windows starts", p.startup, v => api.set_pref("startup", v)));
+      const b = h(`<div class="btns" style="padding:8px 0 0"><button class="btn small">${icon("mini")} Open Mini Player</button></div>`); b.firstChild.onclick = () => api.toggle_mini(); n.appendChild(b);
+    });
+  }
+  const ab = card(c, "note", "About");
+  ab.appendChild(h(`<div class="note">Musiplex 2.3 · ${ANDROID ? "Android" : local && local.windows ? "Windows" : "Desktop"}. Nothing about you is built into the app: the server's PIN and key are made on it, and this ${myWord}'s ID is made here.</div>`));
+}
+async function importFolder() {
+  let path = null;
+  if (api && api.pick_folder) path = await api.pick_folder();
+  else path = await ask("Folder to add (full path)", "");
+  if (!path) return;
+  L.post("/local/folders", { add: path }).then(r => { if (r.error) toast(r.error); else { toast(`Added · ${r.songs} songs`); render(); } });
+}
+
+// ======================================================================= Discover (new songs per genre)
+function discover(genre) {
+  const box = sheet("discover", `<h3>${icon("sparkles")} New ${esc(genre)} songs <button class="x" data-close>Close</button></h3><div class="pad"><div class="note">Not in your library. Tap ▶ for a 30‑second preview. To put them in Spotify, export the list and import it with TuneMyMusic or Soundiiz (free).</div><div class="btns" style="padding:0"><button class="btn small" id="dcsv">${icon("down")} Export CSV</button><button class="btn small" id="dcopy">${icon("copy")} Copy List</button><button class="btn small" id="dtmm">${icon("link")} TuneMyMusic</button><button class="btn small" id="dsz">${icon("link")} Soundiiz</button></div></div><div id="dlist"><div class="empty">Looking…</div></div>`);
+  let songsFound = [];
+  L.get(`/local/discover?genre=${encodeURIComponent(genre)}`).then(list => {
+    songsFound = list; const l = box.querySelector("#dlist"); l.innerHTML = "";
+    if (!list.length) return empty(l, "search", "Nothing new found right now.");
+    list.forEach(s => {
+      const r = h(`<div class="row"><div class="art"></div><div class="t"><div>${esc(s.title)}</div><div class="sub">${esc(s.artist)}${s.album ? " · " + esc(s.album) : ""}</div></div>${s.preview ? `<button class="ib">${icon("play")}</button>` : ""}${s.url ? `<button class="ib">${icon("link")}</button>` : ""}</div>`);
+      const a = r.querySelector(".art"); if (s.art) a.style.backgroundImage = `url("${s.art}")`; else a.classList.add("none");
+      const bs = r.querySelectorAll("button");
+      if (s.preview) bs[0].onclick = () => { const pv = $("pv"); if (pv.src === s.preview && !pv.paused) { pv.pause(); bs[0].innerHTML = icon("play"); return; } box.querySelectorAll(".ib").forEach(x => { if (x.innerHTML.includes("i-pause")) x.innerHTML = icon("play"); }); pv.src = s.preview; pv.play(); bs[0].innerHTML = icon("pause"); };
+      if (s.url) bs[bs.length - 1].onclick = () => openURL(s.url);
+      l.appendChild(r);
+    });
+  }).catch(() => { box.querySelector("#dlist").innerHTML = `<div class="empty">Couldn't search right now.</div>`; });
+  const text = () => songsFound.map(s => `${s.artist} - ${s.title}`).join("\n");
+  const csv = () => "Title,Artist,Album\n" + songsFound.map(s => [s.title, s.artist, s.album].map(v => `"${String(v || "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  box.querySelector("#dcsv").onclick = async () => { const name = `Musiplex ${genre}.csv`; if (api && api.save_text) { const p = await api.save_text(name, csv()); toast(p ? "Saved to Downloads" : "Couldn't save"); } else { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv()], { type: "text/csv" })); a.download = name; a.click(); } };
+  box.querySelector("#dcopy").onclick = () => { (api && api.copy ? api.copy(text()) : navigator.clipboard.writeText(text())); toast(`Copied ${songsFound.length} songs`); };
+  box.querySelector("#dtmm").onclick = () => openURL("https://www.tunemymusic.com/transfer");
+  box.querySelector("#dsz").onclick = () => openURL("https://soundiiz.com/");
+}
+
+// ======================================================================= connection sheet
+function setMsg(t) { const m = $("msg"); if (m) m.textContent = t; }
+function drawFound() {
+  const f = $("found"); if (!f) return; f.innerHTML = "";
+  found.forEach((name, hh) => {
+    const b = h(`<button><span><b>${esc(name)}</b><br><span class="dim" style="font-size:13px">${esc(hh)}</span></span><span class="dim" style="font-size:13px">${hh === host && authed ? "Connected" : tokens[hh] ? "Paired" : "Tap to pair"}</span></button>`);
+    b.onclick = () => { $("host").value = hh; start(hh); };
+    f.appendChild(b);
+  });
+}
+function openLink(text) {
+  sheet("link", `<h3>Connection <button class="x" data-close>Close</button></h3><div class="pad"><div class="dim" style="font-size:14px">${esc(text || (authed ? `Connected to ${serverName}.` : "Pick your Musiplex server (Mac, Windows or Linux) on this Wi‑Fi, or type its address. Away from home, use its Tailscale address."))}</div>
+    <div class="found" id="found"></div><input id="host" placeholder="Address, e.g. 192.168.1.20 or 100.x.y.z" autocapitalize="off" inputmode="url">
+    <input id="pin" class="${wantPin ? "" : "hidden"}" placeholder="6‑digit PIN" inputmode="numeric" maxlength="6">
+    <button class="btn primary" id="go">Connect</button><div id="msg" class="dim" style="font-size:14px;min-height:18px"></div>
+    ${tokens[host] && !local ? `<button class="btn red" id="forget">Forget this server</button>` : ""}</div>`);
+  $("host").value = host;
+  drawFound();
+  $("go").onclick = () => { const hh = $("host").value.trim().replace(/^\w+:\/\//, "").replace(/[:/].*$/, ""); if (!hh) return setMsg("Type the server's address, or pick one above."); start(hh, $("pin").value.trim()); };
+  if ($("forget")) $("forget").onclick = () => { delete tokens[host]; store.set("tokens", tokens); stop(); host = ""; store.set("host", ""); closeSheet(); drawStatus(); };
+  if (wantPin) setTimeout(() => $("pin").focus(), 350);
+}
+function drawStatus() {
+  const label = authed ? serverName : wantPin ? "Enter PIN" : offline.active ? "Offline" : host ? "Connecting…" : "Searching…";
+  document.querySelectorAll(".statuslabel").forEach(e => e.textContent = label);
+  document.querySelectorAll(".statusdot").forEach(e => e.classList.toggle("on", authed));
+}
+
+// ======================================================================= now playing UI
+function drawPlayer() {
+  if (MODE === "notch") return drawNotchMusic();
+  const id = cur(), t = id && byId[id];
+  const audible = linked() ? state && state.activeDevice : deviceID;
+  const playing = !!(state && state.isPlaying);
+  const set = (sel, fn) => document.querySelectorAll(sel).forEach(fn);
+  set(".np-title", e => e.textContent = t ? t.title : (id ? "…" : "Nothing playing"));
+  set(".np-artist", e => e.textContent = t ? t.artist : "");
+  set(".np-art", e => setArt(e, id));
+  set(".np-toggle", e => e.innerHTML = icon(playing ? "pause" : "play"));
+  set(".np-shuffle", e => e.classList.toggle("on", !!(state && state.shuffle)));
+  set(".np-repeat", e => { e.classList.toggle("on", !!(state && state.repeatMode !== "off")); e.innerHTML = icon("repeat") + (state && state.repeatMode === "one" ? '<b style="position:absolute;font-size:8px;margin:8px 0 0 9px">1</b>' : ""); e.style.position = "relative"; });
+  set(".np-where", e => e.textContent = audible === deviceID ? `Playing on this ${myWord}` : `Playing on ${nameOf(audible)}`);
+  set(".np-vol", e => { if (document.activeElement !== e) e.value = vol(); });
+  set(".spk span", e => e.textContent = !linked() ? "Offline" : audible === deviceID ? (sinkLabel || `This ${myWord}`) : nameOf(audible));
+  if ($("mini")) $("mini").classList.toggle("hidden", !id || $("full").classList.contains("open"));
+  if ($("bigart")) $("bigart").classList.toggle("paused", !playing);
+  const dl = $("dlbtn");
+  if (dl) {
+    dl.onclick = null; dl.style.color = "#fff";
+    if (t && downloads[t.id]) { dl.innerHTML = icon("check"); dl.style.color = "var(--accent)"; }
+    else if (t && progress[t.id] !== undefined) dl.innerHTML = `<div class="ring" style="--p:${Math.max(3, progress[t.id] * 100)}"></div>`;
+    else if (t && linked() && bridge) { dl.innerHTML = icon("down"); dl.onclick = () => download(t); }
+    else dl.innerHTML = "";
+  }
+  const chips = $("chips");
+  if (chips) {
+    chips.innerHTML = "";
+    if (linked()) deviceList().forEach(d => { const b = h(`<button class="chip${audible === d.id ? " sel" : ""}">${icon(deviceIcon(d))}${esc(d.id === deviceID ? `This ${myWord}` : d.name)}</button>`); b.onclick = () => pickDevice(d.id); chips.appendChild(b); });
+    chips.classList.toggle("hidden", !linked());
+    $("fvol").classList.toggle("hidden", !(linked() && audible === "mac"));
+    $("hint").textContent = !linked() ? "Offline · playing downloads" : audible === deviceID ? `Sound is on this ${myWord} · other devices mirror, muted` : `Sound is on ${nameOf(audible)} · this ${myWord} is mirroring, muted`;
+  }
+  tint(id);
+  tick();
+}
+let sinkLabel = "";
+(async () => { if (sinkId) { const o = (await outputs()).find(x => x.deviceId === sinkId); sinkLabel = o ? o.label : ""; } })();
+let scrubbing = null;
+function tick() {
+  const t = byId[cur()], d = t ? t.duration : 0;
+  const p = scrubbing ?? Math.min(position(), d || Infinity);
+  document.querySelectorAll(".np-pos").forEach(e => e.textContent = fmt(p));
+  document.querySelectorAll(".np-dur").forEach(e => e.textContent = "-" + fmt(Math.max(0, d - p)));
+  document.querySelectorAll(".np-fill").forEach(e => e.style.width = d ? `${(p / d) * 100}%` : "0");
+}
+setInterval(tick, 500);
+function wireScrub(el) {
+  const at = x => { const t = byId[cur()]; if (!t) return null; const r = el.getBoundingClientRect(); return Math.max(0, Math.min(1, (x - r.left) / r.width)) * t.duration; };
+  el.addEventListener("pointerdown", e => { scrubbing = at(e.clientX); if (scrubbing === null) return; el.classList.add("drag"); el.setPointerCapture(e.pointerId); tick(); });
+  el.addEventListener("pointermove", e => { if (scrubbing !== null) { scrubbing = at(e.clientX); tick(); } });
+  el.addEventListener("pointerup", () => { if (scrubbing === null) return; const v = scrubbing; scrubbing = null; el.classList.remove("drag"); if (here()) P().currentTime = v; command("seek", { value: v }); });
+}
+function wireControls(root) {
+  root.querySelectorAll(".np-toggle").forEach(b => b.onclick = e => { e.stopPropagation(); window.remote("toggle"); });
+  root.querySelectorAll(".np-next").forEach(b => b.onclick = e => { e.stopPropagation(); command("next"); });
+  root.querySelectorAll(".np-prev").forEach(b => b.onclick = e => { e.stopPropagation(); command("prev"); });
+  root.querySelectorAll(".np-shuffle").forEach(b => b.onclick = () => command("shuffle"));
+  root.querySelectorAll(".np-repeat").forEach(b => b.onclick = () => command("repeat"));
+  root.querySelectorAll(".np-vol").forEach(b => b.oninput = e => { if (here()) P().volume = +e.target.value; command("volume", { value: +e.target.value }); });
+  root.querySelectorAll(".scrub").forEach(wireScrub);
+  root.querySelectorAll(".spk").forEach(b => b.onclick = e => { e.stopPropagation(); const r = b.getBoundingClientRect(); speakerMenu(r.left, r.top - 8 - 240); });
+}
+const controlsHTML = big => `<div class="ctl"><button class="np-shuffle" style="font-size:${big ? 20 : 15}px">${icon("shuffle")}</button><button class="np-prev" style="font-size:${big ? 28 : 18}px">${icon("prev")}</button><button class="np-toggle big">${icon("play")}</button><button class="np-next" style="font-size:${big ? 28 : 18}px">${icon("next")}</button><button class="np-repeat" style="font-size:${big ? 20 : 15}px">${icon("repeat")}</button></div>`;
+
+// artwork colour for the Now Playing background (like the iPhone)
+let tinted = "";
+function tint(id) {
+  if (!id || id === tinted || !linked() || !$("full")) return;
+  tinted = id;
+  get(artURL(id), (status, data) => {
+    if (status !== 200 || tinted !== id) return;
+    const img = new Image();
+    img.onload = () => {
+      const cv = document.createElement("canvas"); cv.width = cv.height = 8;
+      const g = cv.getContext("2d"); g.drawImage(img, 0, 0, 8, 8);
+      let px; try { px = g.getImageData(0, 0, 8, 8).data; } catch { return; }
+      let r = 0, gg = 0, b = 0; for (let i = 0; i < px.length; i += 4) { r += px[i]; gg += px[i + 1]; b += px[i + 2]; }
+      const n = px.length / 4; $("full").style.setProperty("--tint", `rgb(${r / n | 0},${gg / n | 0},${b / n | 0})`);
+    };
+    img.src = data;
+  }, true);
+}
+
+// queue (drawer on desktop, sheet on phone, list in the mini player)
+function queueRows(l) {
+  l.innerHTML = "";
+  if (!state || !state.queue.length) return empty(l, "list", "Nothing queued.");
+  state.queue.slice(state.index, state.index + 200).forEach((id, n) => {
+    const t = byId[id]; if (!t) return;
+    const r = trackRow(t, [], 0);
+    r.onclick = () => { command("jump", { index: state.index + n }); if (sheetName === "queue") closeSheet(); };
+    l.appendChild(r);
+  });
+}
+function drawQueue() {
+  if ($("drawer") && $("drawer").classList.contains("open")) queueRows($("qlist"));
+  if (sheetName === "queue") queueRows($("sheetbox").querySelector("#ql"));
+  if (MODE === "mini") drawMiniQueue();
+}
+function openQueue() {
+  if (wide()) { $("drawer").classList.toggle("open"); drawQueue(); return; }
+  const box = sheet("queue", `<h3>Up Next <button class="x" data-close>Close</button></h3><div id="ql"></div>`); queueRows(box.querySelector("#ql"));
+}
+
+// ======================================================================= phone layout
+function buildPhone() {
+  document.body.className = "";
+  $("root").innerHTML = `
+  <div id="phone">
+    <header><h1>Musiplex</h1><button class="status" id="status"><i class="statusdot"></i><span class="statuslabel">Searching…</span></button><button class="gear" id="gear">${icon("gear")}</button></header>
+    <div class="seg" id="seg"><button data-tab="songs">Songs</button><button data-tab="albums">Albums</button><button data-tab="playlists">Playlists</button>${ANDROID ? `<button data-tab="offline">Offline</button>` : ""}<button data-tab="history">History</button></div>
+    <div class="search" id="searchbox">${icon("search")}<input id="search" placeholder="Search" type="search" autocomplete="off"></div>
+    <div id="content"></div>
+  </div>
+  <div id="mini" class="hidden"><div class="art np-art" id="miniart"></div><div class="t"><div class="n np-title"></div><div class="w">${icon("speaker")}<span class="np-where"></span></div></div><button class="np-toggle"></button><button class="np-next" style="font-size:20px">${icon("next")}</button></div>
+  <div id="full"><div class="tint"></div><div class="in">
+    <button class="grab" id="grab" aria-label="Close player"><i></i></button>
+    <div class="art np-art" id="bigart"></div>
+    <div class="np"><button class="t" id="openqueue" style="text-align:left"><div id="ftitle" class="np-title">—</div><div id="fartist" class="np-artist"></div></button><button id="queuebtn">${icon("list")}</button><button id="dlbtn"></button></div>
+    <div class="scrub" style="margin-top:18px"><div class="track"><i class="np-fill"></i></div></div>
+    <div class="times"><span class="np-pos">0:00</span><span class="np-dur">0:00</span></div>
+    ${controlsHTML(true)}
+    <div class="chips" id="chips"></div>
+    <div class="vol hidden" id="fvol" style="margin-top:12px">${icon("speaker")}<input type="range" min="0" max="1" step="0.01" class="np-vol">${icon("speaker")}</div>
+    <div class="hint" id="hint"></div>
+  </div></div>`;
+  document.querySelectorAll("#seg button").forEach(b => b.onclick = () => go({ v: b.dataset.tab }));
+  $("search").oninput = e => { query = e.target.value; render(); };
+  $("status").onclick = () => openLink();
+  $("gear").onclick = () => go({ v: "settings" }, true);
+  $("mini").onclick = () => expand(true);
+  $("grab").onclick = () => expand(false);
+  $("queuebtn").onclick = $("openqueue").onclick = openQueue;
+  wireControls($("root"));
+  const f = $("full"); let y0 = null, dy = 0;
+  f.addEventListener("touchstart", e => { if (e.target.closest(".scrub,.chips,.vol")) { y0 = null; return; } y0 = e.touches[0].clientY; dy = 0; }, { passive: true });
+  f.addEventListener("touchmove", e => { if (y0 === null) return; dy = Math.max(0, e.touches[0].clientY - y0); if (dy > 4) { f.style.transition = "none"; f.style.transform = `translateY(${dy}px)`; } }, { passive: true });
+  f.addEventListener("touchend", () => { if (y0 === null) return; y0 = null; f.style.transition = ""; if (dy > 140) expand(false); else f.style.transform = ""; });
+}
+function expand(on) {
+  const full = $("full"), big = $("bigart"); if (!full) return;
+  if (on === full.classList.contains("open")) return;
+  if (on) {
+    if (!cur()) return;
+    const from = $("miniart").getBoundingClientRect();
+    full.classList.add("open"); drawPlayer();
+    const to = big.getBoundingClientRect();
+    if (to.width && from.width) {
+      const dx = from.left - to.left, dy = from.top - (to.top - innerHeight), s = from.width / to.width;
+      big.animate([{ transform: `translate(${dx}px,${dy}px) scale(${s})`, borderRadius: "40px" }, { transform: "none", borderRadius: "14px" }], { duration: 420, easing: "cubic-bezier(.2,.9,.25,1)" });
+    }
+  } else { full.classList.remove("open"); full.style.transform = ""; setTimeout(drawPlayer, 380); }
+}
+
+// ======================================================================= desktop layout (Mac app)
+function buildDesk() {
+  document.body.className = "desk";
+  $("root").innerHTML = `
+  <div id="desk">
+    <nav id="sidebar"></nav>
+    <div style="position:relative;overflow:hidden;display:flex;flex-direction:column"><main id="main"><div id="content"></div></main>
+      <aside id="drawer"><h3>Up Next</h3><div id="qlist"></div></aside></div>
+    <footer id="bar">
+      <button class="now" id="barnow" title="Up next"><div class="art np-art"></div><div><b class="np-title">Nothing playing</b><span class="np-artist"></span></div></button>
+      <div class="mid">${controlsHTML(false)}<div class="sc"><span class="np-pos">0:00</span><div class="scrub"><div class="track"><i class="np-fill"></i></div></div><span class="np-dur">0:00</span></div></div>
+      <div class="right"><button class="spk" title="Choose the speaker">${icon("hifi")}<span>This computer</span></button><div class="vol">${icon("speaker")}<input type="range" min="0" max="1" step="0.01" class="np-vol"></div>
+        <button class="ib" id="qbtn" title="Up next">${icon("list")}</button>${api ? `<button class="ib" id="minibtn" title="Mini player">${icon("mini")}</button>` : ""}</div>
+    </footer>
+  </div>`;
+  $("barnow").onclick = openQueue; $("qbtn").onclick = openQueue;
+  if ($("minibtn")) $("minibtn").onclick = () => api.toggle_mini();
+  wireControls($("root"));
+  drawSidebar();
+}
+function drawSidebar() {
+  const s = $("sidebar"); if (!s) return;
+  const navs = [["home", "Home", "home"], ["songs", "Songs", "note"], ["albums", "Albums", "stack"], ["artists", "Artists", "mic"], ["settings", "Settings", "gear"]];
+  const guess = (catalog.playlists || []).find(p => p.id === "auto-guess");
+  s.innerHTML = `<div class="logo"><b>${icon("note")}</b>Musiplex</div>
+    <div class="search">${icon("search")}<input id="dsearch" placeholder="Search" type="search" autocomplete="off"></div>
+    ${navs.map(([v, t, i]) => `<button class="nav${route.v === v && !query ? " sel" : ""}" data-v="${v}">${icon(i)}${t}</button>`).join("")}
+    <div class="sec">LIBRARY</div>
+    ${local ? `<button class="nav" id="imp">${icon("plus")}Import Folder…</button>` : ""}
+    <button class="nav" id="conn"><span class="ring2 statusdot" style="margin:0 5px"></span><span class="statuslabel" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">…</span></button>
+    <div class="sec">FOR YOU</div>
+    <button class="fy${route.v === "surprise" ? " sel" : ""}" id="fys"><b>${icon("sparkles")}</b><div>Surprise<span>Picks as it plays</span></div></button>
+    ${guess ? `<button class="fy${route.v === "list" && route.id === "auto-guess" ? " sel" : ""}" id="fyg"><b>${icon("wand")}</b><div>Guess<span>${esc(moment(guess))}</span></div></button>` : ""}
+    <div class="sec">PLAYLISTS <button id="newpl" title="New Playlist">${icon("plus")}</button></div>
+    <div id="pls"></div>`;
+  const q = $("dsearch"); q.value = query; q.oninput = e => { query = e.target.value; render(); drawSidebarSel(); };
+  s.querySelectorAll(".nav[data-v]").forEach(b => b.onclick = () => { query = ""; go({ v: b.dataset.v }); });
+  if ($("imp")) $("imp").onclick = importFolder;
+  $("conn").onclick = () => local ? go({ v: "settings" }) : openLink();
+  $("fys").onclick = () => { query = ""; go({ v: "surprise" }); };
+  if ($("fyg")) $("fyg").onclick = () => { query = ""; go({ v: "list", id: "auto-guess", kind: "Guess" }); };
+  $("newpl").onclick = async () => { const n = await ask("New playlist", "New Playlist"); if (n) newPlaylist(n); };
+  const pls = $("pls"); let dragId = null;
+  myLists().forEach(p => {
+    const b = h(`<button class="plrow${route.v === "list" && route.id === p.id && !query ? " sel" : ""}" draggable="true"><div class="art"></div><span>${esc(p.name)}</span></button>`);
+    setArt(b.querySelector(".art"), p.trackIDs[0]);
+    b.onclick = () => { query = ""; go({ v: "list", id: p.id, kind: "Playlist" }); };
+    b.oncontextmenu = e => { e.preventDefault(); listMenu(p, e.clientX, e.clientY); };
+    b.ondragstart = e => { dragId = p.id; e.dataTransfer.setData("text/musiplex-pl", p.id); };
+    b.ondragover = e => { e.preventDefault(); b.classList.add("drop"); };
+    b.ondragleave = () => b.classList.remove("drop");
+    b.ondrop = e => {
+      e.preventDefault(); b.classList.remove("drop");
+      const ids = e.dataTransfer.getData("text/musiplex-ids");
+      if (ids) { addTo(p.id, JSON.parse(ids)); toast(`Added to ${p.name}`); return; }
+      if (dragId && dragId !== p.id) { const order = myLists().map(x => x.id).filter(x => x !== dragId); order.splice(order.indexOf(p.id), 0, dragId); send({ type: "reorderPlaylists", ids: order }); }
+      dragId = null;
+    };
+    pls.appendChild(b);
+  });
+  drawStatus();
+}
+function drawSidebarSel() { document.querySelectorAll("#sidebar .nav[data-v]").forEach(b => b.classList.toggle("sel", !query && route.v === b.dataset.v)); }
+
+// ======================================================================= mini player window
+function buildMini() {
+  document.body.className = "desk m";
+  $("root").innerHTML = `<div id="minip">
+    <div class="top"><div class="art np-art"></div><div class="t"><div class="np-title" style="font-weight:600">Nothing playing</div><div class="np-artist dim" style="font-size:13px"></div><div class="np-where" style="font-size:11px;color:var(--accent);font-weight:600"></div></div>
+      <div style="display:flex;flex-direction:column;gap:2px"><button class="ib" id="mexp" title="Open Musiplex">${icon("expand")}</button><button class="ib" id="mq" title="Up next">${icon("list")}</button></div></div>
+    <div class="scrub" style="margin-top:8px"><div class="track"><i class="np-fill"></i></div></div><div class="times"><span class="np-pos">0:00</span><span class="np-dur">0:00</span></div>
+    ${controlsHTML(false)}
+    <div class="q hidden" id="mql"></div></div>`;
+  $("mexp").onclick = () => api && api.show_main();
+  $("mq").onclick = () => { const q = $("mql"); q.classList.toggle("hidden"); $("mq").classList.toggle("on", !q.classList.contains("hidden")); if (api) api.mini_queue(!q.classList.contains("hidden")); drawMiniQueue(); };
+  wireControls($("root"));
+}
+function drawMiniQueue() { const q = $("mql"); if (q && !q.classList.contains("hidden")) queueRows(q); }
+
+// ======================================================================= notch window
+let notchOpen = false, notchTab = store.get("notchTab", "music"), notchTimer = null;
+const NTABS = [["music", "note", "Music"], ["files", "box", "File Box"], ["clipboard", "clip", "Clipboard"], ["notes", "pen", "Notes"], ["money", "money", "Currency"], ["settings", "gear", "Settings"], ["power", "bolt", "Battery"]];
+function buildNotch() {
+  document.body.className = "desk n";
+  $("root").innerHTML = `<div id="notch"><div class="pill" id="npill"><div class="art np-art"></div><span class="dim" id="nbat" style="font-size:11px;font-weight:600"></span><div class="bars" id="nbars"><i></i><i></i><i></i><i></i></div></div>
+    <div class="tabs hidden" id="ntabs">${NTABS.map(([k, i, t]) => `<button data-t="${k}" title="${t}">${icon(i)}</button>`).join("")}<span style="flex:1"></span></div><div class="body hidden" id="nbody"><div id="npane"></div></div></div>`;
+  const n = $("notch");
+  n.onmouseenter = () => { clearTimeout(notchTimer); setNotch(true); };
+  n.onmouseleave = () => { clearTimeout(notchTimer); notchTimer = setTimeout(() => { if (!document.activeElement || !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) || notchTab === "music") setNotch(false); }, 450); };
+  $("ntabs").querySelectorAll("button").forEach(b => b.onclick = () => { notchTab = b.dataset.t; store.set("notchTab", notchTab); drawNotch(); });
+  addEventListener("storage", () => { settings = Object.assign(settings, store.get("settings", {})); drawNotchPill(); });
+  setInterval(drawNotchPill, 30000);
+  drawNotchPill();
+}
+function setNotch(open) {
+  if (open === notchOpen) return;
+  notchOpen = open;
+  $("ntabs").classList.toggle("hidden", !open); $("nbody").classList.toggle("hidden", !open);
+  if (api) api.notch(open, idleHidden());
+  if (open) drawNotch();
+}
+const idleHidden = () => settings.notchIdle && !(state && cur() && state.isPlaying);
+let battery = null;
+function drawNotchPill() {
+  const playing = !!(state && state.isPlaying && cur());
+  $("nbars") && $("nbars").classList.toggle("stop", !playing);
+  if (api && !notchOpen) api.notch(false, idleHidden());
+  if (settings.notchBattery) fetch("/local/battery").then(r => r.json()).then(b => { battery = b; $("nbat").textContent = b.percent != null ? `${b.charging ? "⚡" : ""}${b.percent}%` : ""; }).catch(() => {});
+  else $("nbat").textContent = "";
+}
+function drawNotchMusic() {
+  drawNotchPill();
+  const pill = document.querySelector("#npill .np-art"); if (pill) setArt(pill, cur());
+  if (notchOpen && notchTab === "music") drawNotch();
+}
+let notchDrawnFor = "";
+function drawNotch() {
+  if (!$("npane")) return;
+  $("ntabs").querySelectorAll("button").forEach(b => b.classList.toggle("sel", b.dataset.t === notchTab));
+  const p = $("npane");
+  if (notchTab === "music") {
+    const id = cur(), t = id && byId[id];
+    const key = `${id}|${state && state.isPlaying}|${state && state.shuffle}|${state && state.repeatMode}|${state && state.activeDevice}|${devices.length}`;
+    if (notchDrawnFor !== key || !p.querySelector(".mus,.empty")) {
+      notchDrawnFor = key;
+      if (!t) { p.innerHTML = `<div class="empty" style="padding:30px">${icon("note")}Nothing is playing</div>`; return; }
+      p.innerHTML = `<div class="mus"><div class="art np-art"></div><div style="flex:1;min-width:0"><div class="np-title" style="font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div><div class="np-artist dim" style="font-size:13px"></div>
+        <div class="scrub" style="padding:6px 0"><div class="track" style="height:4px"><i class="np-fill" style="background:var(--grad)"></i></div></div><div class="times"><span class="np-pos"></span><span class="np-dur"></span></div>
+        <div style="display:flex;align-items:center;gap:10px">${controlsHTML(false).replace('class="ctl"', 'class="ctl" style="flex:1"')}<button class="spk">${icon("hifi")}<span></span></button></div></div></div>`;
+      wireControls(p);
+      ["np-title", "np-artist", "np-art", "np-toggle", "np-shuffle", "np-repeat", "spk"].forEach(() => {});
+      const save = notchDrawnFor; notchDrawnFor = ""; drawPlayerParts(p); notchDrawnFor = save;
+    } else drawPlayerParts(p);
+    return;
+  }
+  notchDrawnFor = "";
+  if (notchTab === "files") {
+    p.innerHTML = `<div style="display:flex;gap:14px;height:100%"><div class="drop" id="fdrop" style="flex:1;display:grid;place-items:center">${icon("box")}<div>Drop files here to keep them<br><span style="font-size:11px">Music files go to Floating</span></div></div><div style="flex:1.3;min-width:0;display:flex;flex-direction:column"><div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13px">File Box</b><button class="btn small" id="fopen">${icon("folder")} Open</button></div><div id="flist" style="overflow-y:auto;flex:1"></div></div></div>`;
+    const drop = $("fdrop");
+    drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+    drop.ondragleave = () => drop.classList.remove("over");
+    drop.ondrop = async e => {
+      e.preventDefault(); drop.classList.remove("over");
+      const fd = new FormData(); [...e.dataTransfer.files].forEach(f => fd.append("file", f, f.name));
+      if (![...fd.keys()].length) return;
+      const r = await fetch("/local/filebox", { method: "POST", headers: { "X-Musiplex": "1" }, body: fd }).then(r => r.json()).catch(() => null);
+      toast(r ? `Kept ${r.saved.length} file${r.saved.length === 1 ? "" : "s"}` : "Couldn't keep that"); drawFiles();
+    };
+    $("fopen").onclick = () => L.post("/local/open", { what: "filebox" });
+    drawFiles();
+  } else if (notchTab === "clipboard") {
+    p.innerHTML = `<b style="font-size:13px">Clipboard</b> <span class="dim" style="font-size:11px">· click to copy again</span><div id="clips" style="margin-top:6px"></div>`;
+    const drawC = () => (api ? api.clipboard() : Promise.resolve([])).then(items => {
+      const l = $("clips"); if (!l) return; l.innerHTML = "";
+      if (!items.length) return l.appendChild(h(`<div class="note">Text you copy shows up here (kept only while Musiplex runs).</div>`));
+      items.forEach(t => { const b = h(`<button class="clip"></button>`); b.textContent = t.replace(/\s+/g, " ").slice(0, 200); b.title = t.slice(0, 500); b.onclick = () => { api.copy(t); toast("Copied"); }; l.appendChild(b); });
+    });
+    drawC();
+  } else if (notchTab === "notes") {
+    p.innerHTML = `<textarea id="nnote" style="width:100%;height:100%;resize:none;background:rgba(255,255,255,.06)" placeholder="Notes… (saved as you type)"></textarea>`;
+    const ta = $("nnote"); ta.value = store.get("notes", ""); ta.oninput = () => store.set("notes", ta.value);
+  } else if (notchTab === "money") {
+    const cur3 = ["USD", "EUR", "GBP", "EGP", "SAR", "AED", "CAD", "AUD", "JPY", "CNY", "INR", "TRY", "CHF", "KWD", "QAR", "MXN", "BRL", "KRW"];
+    const m = store.get("money", { amount: "100", from: "USD", to: "EUR" });
+    p.innerHTML = `<div style="display:flex;gap:8px;align-items:center"><input id="mamt" style="width:130px" inputmode="decimal"><select id="mfrom">${cur3.map(c => `<option>${c}</option>`).join("")}</select><button class="ib" id="mswap">⇄</button><select id="mto">${cur3.map(c => `<option>${c}</option>`).join("")}</select></div><div id="mres" class="grad" style="font-size:34px;font-weight:800;margin-top:10px"></div><div id="mnote" class="note"></div>`;
+    $("mamt").value = m.amount; $("mfrom").value = m.from; $("mto").value = m.to;
+    const calc = () => {
+      const st = { amount: $("mamt").value, from: $("mfrom").value, to: $("mto").value }; store.set("money", st);
+      const cache = store.get("rates", {}), c = cache[st.from];
+      const show = rates => { const v = parseFloat(st.amount.replace(",", ".")); if (!rates || !rates.rates[st.to] || isNaN(v)) { $("mres").textContent = ""; return; } $("mres").textContent = new Intl.NumberFormat(undefined, { style: "currency", currency: st.to }).format(v * rates.rates[st.to]); $("mnote").textContent = `Rates from ${new Date(rates.at).toLocaleString()} · open.er-api.com`; };
+      if (c && Date.now() - c.at < 6 * 3600e3) return show(c);
+      $("mnote").textContent = "Getting exchange rates…";
+      fetch(`https://open.er-api.com/v6/latest/${st.from}`).then(r => r.json()).then(j => { const v = { rates: j.rates, at: Date.now() }; cache[st.from] = v; store.set("rates", cache); show(v); }).catch(() => { $("mnote").textContent = "Couldn't get exchange rates — check your connection."; });
+    };
+    ["mamt", "mfrom", "mto"].forEach(i => $(i).oninput = calc);
+    $("mswap").onclick = () => { const a = $("mfrom").value; $("mfrom").value = $("mto").value; $("mto").value = a; calc(); };
+    calc();
+  } else if (notchTab === "settings") {
+    p.innerHTML = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 24px" id="nset"></div>`;
+    const s = $("nset");
+    s.appendChild(toggleRow("Hide when nothing is playing", settings.notchIdle, v => { settings.notchIdle = v; saveSettings(); }));
+    s.appendChild(toggleRow("Show battery", settings.notchBattery, v => { settings.notchBattery = v; saveSettings(); drawNotchPill(); }));
+    s.appendChild(toggleRow("Show the notch", true, v => { if (!v && api) api.set_pref("notch", false); }));
+    const cf = h(`<div><div class="note" style="margin:6px 0 4px">CROSSFADE</div></div>`); crossfadePills(cf); s.appendChild(cf);
+  } else if (notchTab === "power") {
+    p.innerHTML = `<div id="pw" class="empty" style="padding:20px">…</div>`;
+    fetch("/local/battery").then(r => r.json()).then(b => {
+      $("pw").outerHTML = b.percent == null ? `<div class="empty" style="padding:24px">${icon("bolt")}No battery — this computer runs on mains power.</div>`
+        : `<div style="display:flex;align-items:center;gap:24px;padding:10px 6px"><div style="font-size:52px;font-weight:800" class="grad">${b.percent}%</div><div><div style="font-size:16px;font-weight:600">${b.charging ? "Charging" : b.plugged ? "Plugged in" : "On battery"}</div><div class="note">${b.plugged ? "Power adapter connected" : "Unplugged"}</div></div></div><div class="track" style="height:8px;border-radius:4px;background:rgba(255,255,255,.15);overflow:hidden;margin:6px 6px 0"><i style="display:block;height:100%;width:${b.percent}%;background:var(--grad)"></i></div>`;
+    }).catch(() => {});
+  }
+}
+function drawFiles() {
+  L.get("/local/filebox").then(r => {
+    const l = $("flist"); if (!l) return; l.innerHTML = "";
+    if (!r.files.length) return l.appendChild(h(`<div class="note">Empty.</div>`));
+    r.files.slice(0, 50).forEach(f => { const row = h(`<div class="fileitem">${icon("box")}<span></span><span class="dim" style="flex:none">${(f.size / 1e6).toFixed(1)} MB</span><button class="ib">${icon("trash")}</button></div>`); row.children[1].textContent = f.name; row.querySelector("button").onclick = () => fetch(`/local/filebox?name=${encodeURIComponent(f.name)}`, { method: "DELETE", headers: { "X-Musiplex": "1" } }).then(drawFiles); l.appendChild(row); });
+  }).catch(() => {});
+}
+function drawPlayerParts(root) {
+  const id = cur(), t = id && byId[id], playing = !!(state && state.isPlaying);
+  const audible = state && state.activeDevice;
+  root.querySelectorAll(".np-title").forEach(e => e.textContent = t ? t.title : "");
+  root.querySelectorAll(".np-artist").forEach(e => e.textContent = t ? t.artist : "");
+  root.querySelectorAll(".np-art").forEach(e => setArt(e, id));
+  root.querySelectorAll(".np-toggle").forEach(e => e.innerHTML = icon(playing ? "pause" : "play"));
+  root.querySelectorAll(".np-shuffle").forEach(e => e.classList.toggle("on", !!(state && state.shuffle)));
+  root.querySelectorAll(".np-repeat").forEach(e => e.classList.toggle("on", !!(state && state.repeatMode !== "off")));
+  root.querySelectorAll(".spk span").forEach(e => e.textContent = linked() ? nameOf(audible).replace(/^this computer$/, "Computer") : "…");
+  tick();
+}
+
+// ======================================================================= start
+function build() {
+  if (MODE === "mini") buildMini();
+  else if (MODE === "notch") buildNotch();
+  else if (wide()) buildDesk();
+  else buildPhone();
+  render(); drawPlayer(); drawStatus();
+}
+let wasWide = wide();
+addEventListener("resize", () => { if (wide() !== wasWide) { wasWide = wide(); if (wasWide && !["songs", "albums", "playlists", "history"].includes(route.v)) route = { v: "home" }; build(); } });
+window.addEventListener("pywebviewready", () => { api = window.pywebview.api; if (MODE === "full") build(); });
+async function boot() {
+  build();
+  if (SERVED) {
+    host = location.hostname;
+    try {
+      const r = await fetch("/local/token", { cache: "no-store" });
+      if (r.ok) {
+        local = await r.json(); tokens[host] = local.token; serverName = local.name;
+        deviceName = PANEL ? (MODE === "mini" ? "Mini player" : "Notch") : local.computer || "This computer";
+        build(); start(host); return;
+      }
+    } catch {}
+    start(host); return;   // opened from another computer: pairs with the PIN like a phone
+  }
+  bridge && bridge.discover(true);
+  if (host) start(host); else setTimeout(() => { if (!host) openLink(); }, 1500);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden && !authed && host && !wantPin) start(host); });
+boot();
+</script>
+</body></html>
