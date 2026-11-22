@@ -1461,7 +1461,10 @@ class Server:
         print(f"  home network: {self.lan_ip()}  ·  Tailscale: {self.tailscale_ip() or 'off'}", flush=True)
         print(f"  ports: {self.http_port} (HTTP), {self.ws_port} (WebSocket)", flush=True)
         try:
-            await asyncio.gather(self.ticker(), self.rescanner(), self.mac_link())
+            jobs = [self.ticker(), self.rescanner(), self.mac_link()]
+            if getattr(self, "toddle", None) is not None:
+                jobs.append(self.toddle.loop(self.client))   # Toddle deadlines every 15 minutes
+            await asyncio.gather(*jobs)
         finally:
             if zc:
                 await zc.async_close()

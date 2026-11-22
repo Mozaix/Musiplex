@@ -74,6 +74,9 @@ def clean(t: dict) -> dict | None:
         "source": t.get("source") if t.get("source") in ("manual", "toddle") else "manual",
         "updated": updated,
         "deleted": bool(t.get("deleted")),
+        # Who removed it and when ("Sam's iPhone", "Toddle"), for the Removed list.
+        "deletedBy": str(t["deletedBy"])[:120] if t.get("deleted") and t.get("deletedBy") else None,
+        "deletedAt": float(t["deletedAt"]) if t.get("deleted") and isinstance(t.get("deletedAt"), (int, float)) else None,
     }
 
 
@@ -116,6 +119,8 @@ class TaskStore:
                     continue
                 mine = self.tasks.get(t["id"])
                 if mine is None or t["updated"] > mine["updated"]:
+                    if mine is not None and mine["deleted"] and not t["deleted"] and t["source"] == "toddle":
+                        t["source"] = "manual"   # reinstated: Toddle no longer removes it
                     self.tasks[t["id"]] = t
                     changed = True
             if changed:
@@ -142,7 +147,8 @@ class TaskStore:
                 mine = self.tasks.get(tid)
                 if mine is None:
                     self.tasks[tid] = {"id": tid, "title": title, "due": due, "urgency": default_urgency(due),
-                                       "done": False, "source": "toddle", "updated": now, "deleted": False}
+                                       "done": False, "source": "toddle", "updated": now, "deleted": False,
+                                       "deletedBy": None, "deletedAt": None}
                     added += 1
                 elif not mine["deleted"] and (mine["title"] != title or mine["due"] != due):
                     mine.update(title=title, due=due, updated=now)
@@ -151,10 +157,150 @@ class TaskStore:
                 for t in self.tasks.values():
                     if (t["source"] == source and t["id"].startswith(source + "-") and t["id"] not in seen
                             and not t["deleted"] and not t["done"] and (t["due"] or "") >= today):
-                        t.update(deleted=True, title="", updated=now)
+                        t.update(deleted=True, deletedBy="Toddle", deletedAt=now, updated=now)
                         removed += 1
             self._save()
         return added, removed
+
+
+# --------------------------------------------------------------------------- Toddle, built in
+
+TODDLE_EVERY = 15 * 60
+
+
+def _unfold(text: str) -> list[str]:
+    out: list[str] = []
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if line[:1] in (" ", "\t") and out:
+            out[-1] += line[1:]
+        elif line:
+            out.append(line)
+    return out
+
+
+def _unescape(v: str) -> str:
+    return v.replace("\\n", " ").replace("\\N", " ").replace("\\,", ",").replace("\\;", ";").replace("\\\\", "\\").strip()
+
+
+def _when(params: dict, value: str):
+    import re
+    from datetime import timezone
+    value = value.strip()
+    try:
+        if params.get("VALUE") == "DATE" or re.fullmatch(r"\d{8}", value):
+            return date(int(value[:4]), int(value[4:6]), int(value[6:8])), False
+        dt = datetime.strptime(value.rstrip("Z")[:15], "%Y%m%dT%H%M%S")
+    except ValueError:
+        return None
+    if value.endswith("Z"):
+        dt = dt.replace(tzinfo=timezone.utc)
+    elif "TZID" in params:
+        try:
+            from zoneinfo import ZoneInfo
+            dt = dt.replace(tzinfo=ZoneInfo(params["TZID"].strip('"')))
+        except Exception:
+            dt = dt.astimezone()
+    else:
+        dt = dt.astimezone()
+    return dt.astimezone().replace(tzinfo=None), True
+
+
+def parse_feed(text: str, days_ahead: int = 60) -> list[dict]:
+    """Toddle's calendar (iCal) → [{"sourceId","title","due"}], upcoming deadlines only.
+    Reminders (VALARM) inside an event don't overwrite the event's own fields."""
+    import re
+    from datetime import timedelta
+    events, cur, nested = [], None, 0
+    for line in _unfold(text):
+        if line in ("BEGIN:VEVENT", "BEGIN:VTODO"):
+            cur, nested = {}, 0
+        elif line in ("END:VEVENT", "END:VTODO"):
+            if cur is not None:
+                events.append(cur)
+            cur = None
+        elif cur is not None and line.startswith("BEGIN:"):
+            nested += 1
+        elif cur is not None and line.startswith("END:"):
+            nested = max(0, nested - 1)
+        elif cur is not None and nested == 0 and ":" in line:
+            head, value = line.split(":", 1)
+            name, *rest = head.split(";")
+            cur[name.upper()] = (dict(p.split("=", 1) for p in rest if "=" in p), value)
+    now = datetime.now()
+    horizon = now + timedelta(days=days_ahead)
+    out = []
+    for ev in events:
+        if "UID" not in ev or "SUMMARY" not in ev:
+            continue
+        raw = ev.get("DUE") or ev.get("DTSTART")
+        when = _when(*raw) if raw else None
+        if when is None:
+            continue
+        moment, has_time = when
+        as_dt = moment if isinstance(moment, datetime) else datetime.combine(moment, datetime.max.time())
+        if as_dt < now - timedelta(days=1) or as_dt > horizon:
+            continue
+        out.append({"sourceId": re.sub(r"[^A-Za-z0-9_.@-]", "", ev["UID"][1])[:150],
+                    "title": _unescape(ev["SUMMARY"][1]),
+                    "due": moment.strftime("%Y-%m-%dT%H:%M") if has_time else moment.isoformat()})
+    return out
+
+
+class Toddle:
+    """Checks your Toddle calendar link(s) every 15 minutes and updates the tasks.
+    The link is kept only on this computer (toddle.json next to tasks.json)."""
+
+    def __init__(self, store: TaskStore, folder: Path):
+        self.store = store
+        self.file = Path(folder) / "toddle.json"
+        try:
+            self.cfg = json.loads(self.file.read_text())
+        except (OSError, ValueError):
+            self.cfg = {}
+        self.cfg.setdefault("urls", [])
+        self.status = {"checked": None, "ok": None, "added": 0, "removed": 0, "found": 0, "error": ""}
+        self.wake = None
+
+    def save(self):
+        self.file.write_text(json.dumps(self.cfg))
+        try:
+            os.chmod(self.file, 0o600)
+        except OSError:
+            pass
+
+    async def check(self, session) -> None:
+        urls = [u for u in self.cfg.get("urls") or [] if u]
+        if not urls:
+            return
+        items, complete, error = [], True, ""
+        for url in urls:
+            try:
+                async with session.get(url.replace("webcal://", "https://", 1),
+                                       headers={"User-Agent": "Musiplex-Workload/2.4"}) as r:
+                    text = await r.text(errors="replace")
+                if r.status != 200 or "BEGIN:VCALENDAR" not in text:
+                    complete, error = False, f"Toddle answered {r.status}"
+                    continue
+                items += parse_feed(text)
+            except Exception as e:
+                complete, error = False, f"Couldn't reach Toddle ({type(e).__name__})"
+        added, removed = self.store.import_feed("toddle", items, complete=complete and bool(items)) if items else (0, 0)
+        self.status = {"checked": time.time(), "ok": not error, "added": added, "removed": removed,
+                       "found": len(items), "error": error}
+
+    async def loop(self, session):
+        import asyncio
+        self.wake = asyncio.Event()
+        while True:
+            try:
+                await self.check(session)
+            except Exception as e:  # never stop the loop
+                self.status["error"] = repr(e)
+            try:
+                await asyncio.wait_for(self.wake.wait(), TODDLE_EVERY)
+            except asyncio.TimeoutError:
+                pass
+            self.wake.clear()
 
 
 def install(router, server, config_dir: Path) -> TaskStore:
@@ -196,6 +342,37 @@ def install(router, server, config_dir: Path) -> TaskStore:
         live = sum(1 for t in store.tasks.values() if not t["deleted"])
         return web.json_response({"added": added, "removed": removed, "total": live})
 
+    toddle = Toddle(store, Path(config_dir))
+    server.toddle = toddle
+
+    async def local_toddle(request):
+        """Musiplex Settings: the Toddle link (shown masked) and when it was last checked."""
+        if request.method == "POST":
+            if not server.local(request, write=True):
+                return web.Response(status=403)
+            body = await request.json()
+            url = str(body.get("url") or "").strip()
+            if url and not url.startswith(("https://", "http://", "webcal://")):
+                return web.json_response({"error": "That doesn't look like a calendar link."}, status=400)
+            toddle.cfg["urls"] = [url] if url else []
+            toddle.save()
+            if toddle.wake:
+                toddle.wake.set()     # check now
+        elif not server.local(request):
+            return web.Response(status=403)
+        url = (toddle.cfg.get("urls") or [""])[0]
+        return web.json_response({"set": bool(url), "link": (url[:28] + "…") if len(url) > 30 else url,
+                                  "status": toddle.status, "every": TODDLE_EVERY})
+
+    async def local_workload(request):
+        """Workload on this computer connects here with no PIN: the hub it should sync with."""
+        if not server.local(request):
+            return web.Response(status=403)
+        return web.json_response({"host": "127.0.0.1", "port": server.http_port, "token": server.token,
+                                  "name": server.name, "via": "local", "toddle": bool(toddle.cfg.get("urls"))})
+
+    router.add_route("*", "/local/toddle", local_toddle)
+    router.add_get("/local/workload", local_workload)
     router.add_get("/tasks", get_tasks)
     router.add_post("/tasks", post_tasks)
     router.add_route("*", "/local/tasks", local_tasks)

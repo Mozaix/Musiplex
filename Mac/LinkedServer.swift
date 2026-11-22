@@ -22,6 +22,13 @@ final class LinkedServer {
 
     var isLinked: Bool { token != nil && !hosts.isEmpty }
 
+    /// The linked server as Workload's hub: its address and key, so Workload on this Mac
+    /// syncs with it without asking for a PIN.
+    var hub: [String: Any]? {
+        guard let token, let host = hosts.first else { return nil }
+        return ["host": host, "hosts": hosts, "port": Net.httpPort, "token": token, "name": name ?? "Linked server", "via": "linked"]
+    }
+
     @ObservationIgnored private var token = UserDefaults.standard.string(forKey: "linkedToken")
     @ObservationIgnored private var fetched = Set(UserDefaults.standard.stringArray(forKey: "linkedFetched") ?? [])
     @ObservationIgnored private var timer: Timer?

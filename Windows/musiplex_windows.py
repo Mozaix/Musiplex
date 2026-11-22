@@ -295,6 +295,10 @@ class Api:
                 continue
         return None
 
+    def workload_installed(self):
+        """Workload was ticked in the installer (or added later)."""
+        return (Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Workload" / "Workload.exe").exists()
+
     def get_prefs(self):
         return prefs()
 

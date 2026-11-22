@@ -10,6 +10,8 @@ final class HTTPServer: @unchecked Sendable {
     private var listener: NWListener?
     private var paths: [String: String] = [:]
     private var library = Data("[]".utf8)
+    /// Where Workload on this Mac should sync (the linked Linux server, or this Mac): set by the app.
+    private var hub: [String: Any] = [:]
     private let token: String
     private let artDir: URL
 
@@ -23,6 +25,10 @@ final class HTTPServer: @unchecked Sendable {
         self.paths = paths
         self.library = library
         lock.unlock()
+    }
+
+    func setHub(_ value: [String: Any]) {
+        lock.lock(); hub = value; lock.unlock()
     }
 
     func start(port: Int) throws {
@@ -46,7 +52,12 @@ final class HTTPServer: @unchecked Sendable {
             var buffer = buffer
             if let data { buffer.append(data) }
             if let end = buffer.range(of: Data("\r\n\r\n".utf8)) {
-                self.handle(conn, String(decoding: buffer[..<end.lowerBound], as: UTF8.self))
+                let head = String(decoding: buffer[..<end.lowerBound], as: UTF8.self)
+                let length = head.components(separatedBy: "\r\n").first { $0.lowercased().hasPrefix("content-length:") }
+                    .flatMap { Int($0.dropFirst(15).trimmingCharacters(in: .whitespaces)) } ?? 0
+                guard length > 0 else { return self.handle(conn, head, Data()) }
+                guard length <= 4 << 20 else { return self.respond(conn, 413, "Payload Too Large") }
+                self.readBody(conn, head, Data(buffer[end.upperBound...]), length)
             } else if error != nil || done || buffer.count > 65536 {
                 conn.cancel()
             } else {
@@ -55,25 +66,85 @@ final class HTTPServer: @unchecked Sendable {
         }
     }
 
-    private func handle(_ conn: NWConnection, _ head: String) {
+    private func readBody(_ conn: NWConnection, _ head: String, _ body: Data, _ length: Int) {
+        if body.count >= length { return handle(conn, head, body.prefix(length)) }
+        conn.receive(minimumIncompleteLength: 1, maximumLength: length - body.count) { [weak self] data, _, done, error in
+            guard let self else { return }
+            var body = body
+            if let data { body.append(data) }
+            if error != nil || (done && body.count < length) { conn.cancel(); return }
+            self.readBody(conn, head, body, length)
+        }
+    }
+
+    /// This Mac only (and through its own address, so web pages can't reach it).
+    private func isLocal(_ conn: NWConnection, _ lines: [String]) -> Bool {
+        guard case .hostPort(let host, _) = conn.endpoint else { return false }
+        let remote = "\(host)".split(separator: "%").first.map(String.init) ?? ""
+        guard remote == "127.0.0.1" || remote == "::1" || remote == "::ffff:127.0.0.1" else { return false }
+        let hostHeader = lines.first { $0.lowercased().hasPrefix("host:") }?.dropFirst(5).trimmingCharacters(in: .whitespaces) ?? ""
+        let name = hostHeader.hasPrefix("[") ? String(hostHeader.split(separator: "]").first?.dropFirst() ?? "")
+            : String(hostHeader.split(separator: ":").first ?? "")
+        return ["127.0.0.1", "localhost", "::1"].contains(name)
+    }
+
+    private func json(_ conn: NWConnection, _ object: Any) {
+        respond(conn, 200, "OK", type: "application/json",
+                body: (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8))
+    }
+
+    private func handle(_ conn: NWConnection, _ head: String, _ body: Data) {
         let lines = head.components(separatedBy: "\r\n")
         let parts = lines[0].split(separator: " ")
         guard parts.count >= 2, let comps = URLComponents(string: String(parts[1])) else {
             return respond(conn, 400, "Bad Request")
         }
         let method = String(parts[0])
-        guard method == "GET" || method == "HEAD" else { return respond(conn, 405, "Method Not Allowed") }
+        guard ["GET", "HEAD", "POST"].contains(method) else { return respond(conn, 405, "Method Not Allowed") }
         var range: String?
         for line in lines.dropFirst() where line.lowercased().hasPrefix("range:") {
             range = line.dropFirst(6).trimmingCharacters(in: .whitespaces)
         }
         let path = comps.path
         if path == "/ping" { return respond(conn, 200, "OK", body: Data("musiplex".utf8)) }
+
+        // Workload on this Mac: where to sync (no PIN), the task list, and the Toddle link.
+        if path.hasPrefix("/local/") {
+            guard isLocal(conn, lines) else { return respond(conn, 403, "Forbidden") }
+            let writeOK = lines.contains { $0.lowercased().replacingOccurrences(of: " ", with: "") == "x-musiplex:1" }
+            switch (path, method) {
+            case ("/local/workload", "GET"):
+                lock.lock(); var h = hub; lock.unlock()
+                if h["via"] as? String == "local" { h["toddle"] = !TaskHub.shared.toddleLink.isEmpty }
+                return json(conn, h)
+            case ("/local/tasks", "GET"):
+                return respond(conn, 200, "OK", type: "application/json", body: TaskHub.shared.snapshot())
+            case ("/local/tasks", "POST"):
+                guard writeOK, let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return respond(conn, 403, "Forbidden") }
+                let items = (obj["tasks"] as? [[String: Any]] ?? []).map { $0.compactMapValues { $0 as? String } }
+                let r = TaskHub.shared.importFeed(items, complete: obj["complete"] as? Bool ?? false)
+                return json(conn, ["added": r.added, "removed": r.removed])
+            case ("/local/toddle", "GET"):
+                return json(conn, TaskHub.shared.toddleInfo())
+            case ("/local/toddle", "POST"):
+                guard writeOK, let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return respond(conn, 403, "Forbidden") }
+                TaskHub.shared.setToddle(obj["url"] as? String ?? "")
+                return json(conn, TaskHub.shared.toddleInfo())
+            default:
+                return respond(conn, 404, "Not Found")
+            }
+        }
         guard comps.queryItems?.first(where: { $0.name == "t" })?.value == token else {
             return respond(conn, 401, "Unauthorized")
         }
 
-        if path == "/catalog" {
+        if path == "/tasks" {
+            if method == "POST" {
+                guard let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return respond(conn, 400, "Bad Request") }
+                TaskHub.shared.merge(obj["tasks"] as? [[String: Any]] ?? [])
+            }
+            return respond(conn, 200, "OK", type: "application/json", body: TaskHub.shared.snapshot())
+        } else if path == "/catalog" {
             lock.lock(); let body = library; lock.unlock()
             respond(conn, 200, "OK", type: "application/json", body: body)
         } else if path.hasPrefix("/art/") {

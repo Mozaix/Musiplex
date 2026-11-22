@@ -1,9 +1,12 @@
+import AppKit
 import Foundation
 import Observation
 import SwiftUI
 
-/// School tasks from Workload, kept on the linked Linux server (GET /tasks), for the
-/// notch's Calendar tab. Refreshed when the tab opens and every 5 minutes.
+/// School tasks from Workload for the notch's Calendar tab: from the linked Linux server
+/// when Musiplex is linked to one (the hub), otherwise from this Mac's own task list.
+/// Refreshed when the tab opens and every 5 minutes. Only looks for tasks when Workload
+/// is installed; otherwise the tab offers to get it.
 @MainActor @Observable
 final class WorkloadTasks {
     struct Item: Decodable, Identifiable, Equatable {
@@ -13,6 +16,19 @@ final class WorkloadTasks {
         let urgency: String
         let done: Bool
         let deleted: Bool
+        let deletedBy: String?
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decode(String.self, forKey: .id)
+            title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+            due = try c.decodeIfPresent(String.self, forKey: .due)
+            urgency = try c.decodeIfPresent(String.self, forKey: .urgency) ?? "green"
+            done = try c.decodeIfPresent(Bool.self, forKey: .done) ?? false
+            deleted = try c.decodeIfPresent(Bool.self, forKey: .deleted) ?? false
+            deletedBy = try c.decodeIfPresent(String.self, forKey: .deletedBy)
+        }
+        enum CodingKeys: String, CodingKey { case id, title, due, urgency, done, deleted, deletedBy }
     }
 
     struct Day: Identifiable {
@@ -38,11 +54,19 @@ final class WorkloadTasks {
     }
 
     var isLinked: Bool { linked?.isLinked == true }
+    var hubName: String { isLinked ? (linked?.name ?? "your linked server") : "this Mac" }
+
+    /// Workload is on this Mac (it was ticked in the installer, or installed later).
+    static var installed: Bool {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.musiplex.workload") != nil
+    }
+    static let download = URL(string: "https://github.com/Mozaix/Musiplex/releases/latest")!
 
     func refresh() async {
-        guard let linked, linked.isLinked else { return }
+        guard Self.installed else { loaded = true; return }
         struct Reply: Decodable { let tasks: [Item] }
-        if let data = await linked.get("tasks"), let reply = try? JSONDecoder().decode(Reply.self, from: data) {
+        let data: Data? = if let linked, linked.isLinked { await linked.get("tasks") } else { TaskHub.shared.snapshot() }
+        if let data, let reply = try? JSONDecoder().decode(Reply.self, from: data) {
             items = reply.tasks.filter { !$0.done && !$0.deleted }
             failed = false
             updated = Date()
@@ -121,12 +145,12 @@ struct NotchCalendar: View {
     var body: some View {
         let work = model.workload
         Group {
-            if !work.isLinked {
-                hint("calendar", "Link your Linux server in Settings → Linked Server to see your Workload tasks here.")
+            if !WorkloadTasks.installed {
+                getWorkload
             } else if !work.loaded {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if work.items.isEmpty {
-                hint("checkmark.circle", work.failed ? "Couldn't reach your Linux server." : "Nothing due. Enjoy it.")
+                hint("checkmark.circle", work.failed ? "Couldn't reach \(work.hubName)." : "Nothing due. Enjoy it.")
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
@@ -152,6 +176,22 @@ struct NotchCalendar: View {
             }
         }
         .task { await work.refresh() }
+    }
+
+    /// Workload isn't on this Mac: a short guided step to get it. Once installed it connects
+    /// to this Musiplex by itself (no PIN) and its tasks show up here.
+    private var getWorkload: some View {
+        HStack(spacing: 18) {
+            Image(systemName: "checklist").font(.system(size: 34, weight: .semibold)).foregroundStyle(Theme.gradient)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Add Workload for your tasks").font(.system(size: 14, weight: .bold))
+                Text("1. Download the Musiplex installer and tick Workload.\n2. Open Workload once: it connects to Musiplex by itself.\n3. Your deadlines show up here, by day.")
+                    .font(.system(size: 11.5)).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+                Button("Get Workload") { NSWorkspace.shared.open(WorkloadTasks.download) }
+                    .buttonStyle(.borderedProminent).controlSize(.small).tint(Theme.accent)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func hint(_ symbol: String, _ text: String) -> some View {

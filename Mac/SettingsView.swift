@@ -12,6 +12,7 @@ struct SettingsView: View {
             TasteCard()
             FloatingCard()
             LinkedServerCard()
+            WorkloadCard()
             AppleMusicCard()
             RemoteAccessCard()
             VersionHistoryCard(history: model.library.history)
@@ -461,6 +462,56 @@ struct LinkedServerCard: View {
                 }
             }
         }
+    }
+}
+
+/// Workload: where its tasks live (the hub) and Toddle's calendar link. When this Mac is
+/// linked to a Linux server, that server is the hub and checks Toddle; otherwise this Mac does.
+struct WorkloadCard: View {
+    @Environment(AppModel.self) private var model
+    @State private var link = ""
+    @State private var info: [String: Any] = [:]
+
+    var body: some View {
+        let linked = model.linked
+        SettingsCard(title: "Workload", symbol: "checklist") {
+            VStack(alignment: .leading, spacing: 10) {
+                if !WorkloadTasks.installed {
+                    Text("Workload keeps your school tasks and Toddle deadlines, and shows them in the notch's Calendar tab. It isn't on this Mac yet.")
+                        .font(.callout).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+                    Button("Get Workload") { NSWorkspace.shared.open(WorkloadTasks.download) }
+                } else if linked.isLinked {
+                    Label("Workload on this Mac syncs with \(linked.name ?? "your linked server"), no PIN needed.", systemImage: "checkmark.circle.fill")
+                        .font(.callout)
+                    Text("Your tasks live on \(linked.name ?? "the linked server"), and it checks Toddle every 15 minutes. Set the Toddle link in its Musiplex window (Settings → Workload).")
+                        .font(.caption).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Label("This Mac keeps your Workload tasks. Workload here connects by itself; phones pair with this Mac's PIN.", systemImage: "checkmark.circle.fill")
+                        .font(.callout).fixedSize(horizontal: false, vertical: true)
+                    Text("Toddle: paste your calendar link (Toddle on the web → Calendar → Subscribe → Others). It's checked every 15 minutes and kept only on this Mac.")
+                        .font(.caption).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        TextField(info["set"] as? Bool == true ? "Link saved: \(info["link"] as? String ?? "")" : "Toddle calendar link", text: $link)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Save") { TaskHub.shared.setToddle(link); link = ""; refresh(after: 3) }.disabled(link.isEmpty)
+                        if info["set"] as? Bool == true {
+                            Button("Remove") { TaskHub.shared.setToddle(""); refresh() }
+                        }
+                    }
+                    if let status = info["status"] as? [String: Any], let checked = status["checked"] as? Double {
+                        Text(status["ok"] as? Bool == true
+                             ? "Checked \(Date(timeIntervalSince1970: checked).formatted(date: .omitted, time: .shortened)): \(status["found"] as? Int ?? 0) upcoming deadlines, \(status["added"] as? Int ?? 0) new, \(status["removed"] as? Int ?? 0) removed."
+                             : "Last check failed: \(status["error"] as? String ?? "") — is the link still valid?")
+                            .font(.caption).foregroundStyle(Theme.dim)
+                    }
+                }
+            }
+        }
+        .onAppear { refresh() }
+    }
+
+    private func refresh(after seconds: Double = 0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { info = TaskHub.shared.toddleInfo() }
     }
 }
 

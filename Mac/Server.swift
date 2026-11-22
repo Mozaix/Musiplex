@@ -52,6 +52,11 @@ final class Server {
     /// The key a linked server (the laptop) uses to pass your phones through to this Mac.
     var chainToken: String { token }
 
+    /// Tells the web server where Workload on this Mac should sync (no PIN needed).
+    func setWorkloadHub(_ hub: [String: Any]) { http.setHub(hub) }
+    /// This Mac as the hub (when it isn't linked to another Musiplex server).
+    var selfHub: [String: Any] { ["host": "127.0.0.1", "port": Net.httpPort, "token": token, "name": macName, "via": "local"] }
+
     func name(of deviceID: String) -> String {
         devices.first { $0.id == deviceID }?.name ?? "another device"
     }

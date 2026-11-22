@@ -97,6 +97,15 @@ final class AppModel {
         remote.start()
         library.setUpSongsFolders()
         if linked.isLinked { linked.start() }
+        // Workload: this Mac keeps tasks (and checks Toddle) when it's the hub; Workload on
+        // this Mac asks /local/workload where to sync. Refreshed as the link changes.
+        TaskHub.shared.startToddle()
+        let publishHub = { [weak self] in
+            guard let self else { return }
+            self.server.setWorkloadHub(self.linked.hub ?? self.server.selfHub)
+        }
+        publishHub()
+        Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { _ in MainActor.assumeIsolated { publishHub() } }
         linked.nowPlaying = { [weak self] in
             guard let self, let t = self.library.track(self.session.state.currentID) else { return nil }
             return ["title": t.title, "artist": t.artist, "album": t.album, "duration": t.duration,

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pulls your Toddle deadlines and hands them to Musiplex on this computer.
 
-Run every hour by the systemd timer that install.sh sets up. Uses Toddle's
+Run every 15 minutes by the systemd timer that install.sh sets up. Uses Toddle's
 own calendar feed (Calendar → Subscribe → Others → copy the iCal link), so it
 never needs your Toddle password.
 

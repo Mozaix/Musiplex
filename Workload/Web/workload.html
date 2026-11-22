@@ -118,6 +118,16 @@ h1 { font-size: 34px; font-weight: 700; margin: 6px 0 2px; letter-spacing: -.01e
 .dotbtn:hover { background: var(--hover); }
 .preview { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--secondary); margin: 0 0 4px 30px; }
 
+/* removed */
+.removed { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--divider); }
+.removed .ric { width: 22px; text-align: center; flex: none; }
+.removed .info { flex: 1; min-width: 0; }
+.removed .t { font-weight: 500; }
+.removed .d { font-size: 12px; color: var(--secondary); }
+.reinstate { color: var(--accent); background: var(--hover); font-weight: 500; flex: none; }
+nav .count { margin-left: auto; background: var(--r-dot); color: #fff; font-size: 11px; border-radius: 9px; padding: 0 6px; line-height: 17px; }
+@media (max-width: 700px) { nav button { position: relative; } nav .count { position: absolute; top: 2px; left: 55%; margin: 0; } }
+
 /* sync */
 .section { margin-top: 24px; }
 .section h3 { font-size: 13px; font-weight: 600; color: var(--secondary); margin: 0 0 8px; padding-bottom: 8px; border-bottom: 1px solid var(--divider); }
@@ -358,7 +368,12 @@ function setText(id, text) {
   if (!p.title) return remove(id);
   update(id, t => { t.title = p.title; t.due = p.due; if (p.urgency) t.urgency = p.urgency; });
 }
-function remove(id) { update(id, t => { t.deleted = true; t.title = ""; }); }
+/** Removed everywhere; stays in Removed for 30 days, where it can be reinstated. */
+function remove(id) { update(id, t => { t.deleted = true; t.deletedBy = host.deviceName || "Another device"; t.deletedAt = nowSec(); }); }
+function reinstate(id) { update(id, t => { t.deleted = false; t.deletedBy = null; t.deletedAt = null; }); }
+const removedTasks = () => state.tasks.filter(t => t.deleted && t.title && (t.deletedAt || t.updated) > nowSec() - 30 * 86400)
+  .sort((a, b) => (b.deletedAt || b.updated) - (a.deletedAt || a.updated));
+const recentRemovals = () => removedTasks().filter(t => (t.deletedAt || 0) > nowSec() - 86400 && t.deletedBy !== host.deviceName).length;
 function merge(incoming) {
   let did = false;
   for (const t of incoming || []) {
@@ -412,7 +427,7 @@ async function pair(server, pin) {
   if (r.status === 401) throw new Error("That PIN didn't work. It's in the Musiplex window on the server.");
   if (r.status !== 200) throw new Error("Couldn't reach that server. Is it on and on the same Wi‑Fi?");
   const p = JSON.parse(r.text);
-  Object.assign(P(), { token: p.token, serverHost: server.ip, serverPort: port, serverName: p.name || server.name });
+  Object.assign(P(), { token: p.token, serverHost: server.ip, serverPort: port, serverName: p.name || server.name, auto: false });
   if (!P().awayHost) { const ts = (p.hosts || []).find(h => h.startsWith("100.") && h !== server.ip); if (ts) P().awayHost = ts; }
   save();
   sync.status = "syncing";
@@ -421,22 +436,24 @@ async function pair(server, pin) {
   if (sync.status === "offline" && sync.detail.includes("tasks")) throw new Error("Paired, but this Musiplex server doesn't have tasks yet. Update Musiplex on it.");
 }
 function unpair() {
-  for (const k of ["token", "serverHost", "serverPort", "serverName"]) delete P()[k];
+  for (const k of ["token", "serverHost", "serverPort", "serverName", "auto", "hubToddle"]) delete P()[k];
+  P().autoOff = true;   // don't reconnect by itself after you disconnected
   save(); sync.status = "notPaired"; render(); nowPlaying.restart();
 }
 
-/** Windows with Musiplex on the same PC: use it without a PIN, unless another
- *  Musiplex server is on the Wi‑Fi (that one is probably the hub; pick it in Sync). */
-async function autoPairLocal() {
-  if (P().token || !host.musiplexLocal) return;
-  const local = await host.musiplexLocal().catch(() => null);
-  if (!local || !local.token) return;
-  await new Promise(r => setTimeout(r, 6000));
-  await refreshServers();
-  if (P().token || sync.found.some(s => s.name !== local.name)) return;
-  Object.assign(P(), { token: local.token, serverHost: "127.0.0.1", serverPort: local.http || 7860, serverName: local.name || "This PC" });
-  save(); sync.status = "syncing"; render(); syncNow();
+/** Musiplex on this computer says which hub to use (GET /local/workload): the server it's
+ *  linked to, or itself. No PIN. Re-checked at every start, since the hub changes when
+ *  Musiplex links or unlinks. A PIN pairing you made yourself stays as it is. */
+async function adoptLocalHub() {
+  if (!host.musiplexWorkload || P().autoOff || (P().token && !P().auto)) return;
+  const hub = await host.musiplexWorkload().catch(() => null);
+  if (!hub || !hub.token || !hub.host) return;
+  const same = P().token === hub.token && P().serverHost === hub.host;
+  Object.assign(P(), { token: hub.token, serverHost: hub.host, serverPort: hub.port || 7860, serverName: hub.name || hub.host, auto: true, hubToddle: hub.toddle === true });
+  save();
+  if (!same) { sync.status = "syncing"; render(); syncNow(); nowPlaying.restart(); }
 }
+async function useLocalHub() { delete P().autoOff; await adoptLocalHub(); render(); }
 
 async function refreshServers() {
   try {
@@ -513,7 +530,7 @@ const nowPlaying = {
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const PAGES = [["tasks", "📚", "Tasks"], ["entries", "📝", "Entries"], ["sync", "🔄", "Sync"]];
+const PAGES = [["tasks", "📚", "Tasks"], ["entries", "📝", "Entries"], ["removed", "🗑️", "Removed"], ["sync", "🔄", "Sync"]];
 const companion = location.hash === "#companion";
 let page = "tasks", showDone = false, draftUrg = "green", pairing = null, pairErr = "", pairBusy = false;
 
@@ -557,10 +574,10 @@ function render() {
 function renderInner() {
   document.body.classList.toggle("companion", companion);
   $("#nav").innerHTML = `<div class="ws">Workload</div>` + PAGES.map(([id, ic, name]) =>
-    `<button class="${page === id ? "on" : ""}" data-page="${id}"><span class="ic">${ic}</span>${name}</button>`).join("");
+    `<button class="${page === id ? "on" : ""}" data-page="${id}"><span class="ic">${ic}</span>${name}${id === "removed" && recentRemovals() ? `<span class="count">${recentRemovals()}</span>` : ""}</button>`).join("");
   const main = $("#main");
   const scroll = main.scrollTop;
-  main.innerHTML = `<div class="pagebody">${companion ? companionHTML() : page === "tasks" ? tasksHTML() : page === "entries" ? entriesHTML() : syncHTML()}</div>`;
+  main.innerHTML = `<div class="pagebody">${companion ? companionHTML() : page === "tasks" ? tasksHTML() : page === "entries" ? entriesHTML() : page === "removed" ? removedHTML() : syncHTML()}</div>`;
   main.scrollTop = scroll;
 }
 
@@ -614,6 +631,27 @@ function previewHTML(text) {
   return `<div class="preview">↳ <b>${esc(p.title || "Untitled")}</b> · ${esc(due)} ${p.urgency ? `<span class="tag ${p.urgency}">${URG[p.urgency]}</span>` : ""}</div>`;
 }
 
+function ago(sec) {
+  const m = Math.round((nowSec() - sec) / 60);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} hour${h === 1 ? "" : "s"} ago`;
+  const d = Math.round(h / 24);
+  return d === 1 ? "yesterday" : `${d} days ago`;
+}
+function removedHTML() {
+  const rows = removedTasks().map(t => `
+    <div class="removed" data-id="${t.id}">
+      <span class="ric">${t.deletedBy === "Toddle" ? "📅" : "🗑️"}</span>
+      <div class="info"><div class="t">${esc(t.title)}</div>
+        <div class="d">Removed by ${esc(t.deletedBy || "another device")} · ${ago(t.deletedAt || t.updated)}${t.due ? " · was due " + esc(dueLabel(t)) : ""}</div></div>
+      <button class="btn reinstate" data-act="reinstate">Reinstate</button>
+    </div>`).join("") || `<div class="sub" style="padding:10px 0">Nothing removed lately.</div>`;
+  return header("🗑️", "Removed", "Tasks removed on any of your devices, or by Toddle, in the last 30 days. Reinstate brings one back everywhere.") +
+    `<div style="height:14px"></div>${rows}`;
+}
+
 function syncHTML() {
   const paired = !!P().token;
   const servers = sync.found.map((s, i) => `<button class="server" data-act="pick" data-i="${i}">🖥️ ${esc(s.name)}<small>${esc(s.ip)}</small>${s.name === P().serverName ? " ✓" : ""}</button>`).join("")
@@ -622,9 +660,12 @@ function syncHTML() {
     `<div class="badge">${badgeHTML()}</div>` +
     (paired ? `<div class="section"><h3>Connected</h3>
       <div class="kv"><span>Server</span><span>${esc(P().serverName)}</span></div>
+      ${P().auto ? `<div class="sub">Connected automatically through Musiplex on this computer.</div>` : ""}
+      ${P().auto && P().hubToddle ? `<div class="sub">📅 Toddle is checked every 15 minutes by ${esc(P().serverName)}.</div>` : ""}
       <div class="kv"><span>Home address</span><span>${esc(P().serverHost)}</span></div>
       <div class="kv"><span>Away from home</span><input id="away" data-keep="1" placeholder="Tailscale 100.x.y.z" value="${esc(P().awayHost || "")}"></div>
       <div style="display:flex;gap:8px;margin-top:6px"><button class="btn" data-act="syncnow">Sync now</button><button class="btn danger" data-act="unpair">Disconnect</button></div></div>` : "") +
+    (!paired && host.musiplexWorkload ? `<div class="section"><button class="btn" data-act="uselocal" style="color:var(--accent);padding-left:0">Use Musiplex on this computer (no PIN)</button></div>` : "") +
     `<div class="section"><h3>Musiplex servers on this Wi‑Fi</h3>${servers}
       <div style="display:flex;gap:8px;margin-top:8px"><input id="manual" class="field" data-keep="1" placeholder="Or type an address" style="flex:1"><button class="btn" data-act="manual">Connect</button></div></div>` +
     (pairing ? `<div class="section"><h3>Pair with ${esc(pairing.name)}</h3>
@@ -718,6 +759,8 @@ document.addEventListener("click", e => {
     case "pair": doPair(); break;
     case "syncnow": syncNow(); break;
     case "unpair": unpair(); break;
+    case "reinstate": reinstate(id); break;
+    case "uselocal": useLocalHub(); break;
     case "prev": nowPlaying.cmd("prev"); break;
     case "next": nowPlaying.cmd("next"); break;
     case "toggle": nowPlaying.cmd("toggle"); break;
@@ -777,6 +820,7 @@ function makeHost() {
       load: async () => Android.load() || null,
       save: s => Android.save(s),
       discover: async () => JSON.parse(Android.servers() || "[]"),
+      deviceName: (Android.deviceName && Android.deviceName()) || "Android phone",
     };
   }
   // Windows: pywebview's API (every call returns a promise).
@@ -789,11 +833,16 @@ function makeHost() {
       save: s => api.save(s),
       discover: () => api.discover(),
       musiplexLocal: () => api.musiplex_local(),
+      musiplexWorkload: () => api.musiplex_workload(),
+      getDeviceName: () => api.device_name(),
       openMain: () => api.open_main(),
       quit: () => api.quit(),
     };
   }
-  // Plain browser (testing): same-origin fetch, localStorage.
+  // Plain browser: the Musiplex app window on Linux (served by Musiplex on this computer),
+  // or testing. Same-origin fetch, localStorage.
+  const onMusiplex = ["127.0.0.1", "localhost"].includes(location.hostname) && location.port === "7860";
+  const localJSON = async path => { const r = await fetch(path, { headers: { "X-Musiplex": "1" } }); if (!r.ok) throw new Error(r.status); return r.json(); };
   return {
     platform: "web", inlineNowPlaying: true,
     request: async (method, url, body) => {
@@ -804,17 +853,24 @@ function makeHost() {
     load: async () => { try { return localStorage.getItem("workload"); } catch (e) { return null; } },
     save: s => { try { localStorage.setItem("workload", s); } catch (e) {} },
     discover: async () => location.protocol.startsWith("http") ? [{ name: "This server", ip: location.hostname, http: +location.port || 80, ws: (+location.port || 80) + 1 }] : [],
+    ...(onMusiplex ? {
+      musiplexWorkload: () => localJSON("/local/workload"),
+      musiplexLocal: () => localJSON("/local/token").then(t => ({ token: t.token, name: t.name, http: 7860, ws: 7861 })),
+      getDeviceName: () => localJSON("/local/token").then(t => t.computer || t.name),
+    } : {}),
+    deviceName: "This computer",
   };
 }
 
 let host;
 async function boot() {
   host = makeHost();
+  if (host.getDeviceName) { try { host.deviceName = (await host.getDeviceName()) || host.deviceName; } catch (e) {} }
   try { const saved = JSON.parse(await host.load() || "null"); if (saved) { state.tasks = saved.tasks || []; state.prefs = saved.prefs || {}; } } catch (e) {}
   if (P().token) { sync.status = "offline"; sync.detail = "Not synced yet"; }
   render();
+  await adoptLocalHub();
   syncNow(); refreshServers(); nowPlaying.start();
-  autoPairLocal();
   setInterval(syncNow, 60000);
   setInterval(refreshServers, 15000);
   setInterval(() => { if (page === "tasks" && !companion) renderBadge(); }, 30000);

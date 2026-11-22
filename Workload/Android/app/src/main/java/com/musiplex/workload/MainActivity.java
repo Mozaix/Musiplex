@@ -50,6 +50,7 @@ import java.util.concurrent.Executors;
  * this phone (files/state.json).
  */
 public class MainActivity extends Activity {
+    private static MainActivity current;
     private WebView web;
     private boolean ready = false;
     private final List<String> waiting = new ArrayList<>();
@@ -94,8 +95,16 @@ public class MainActivity extends Activity {
         setContentView(web);
         web.loadUrl("file:///android_asset/index.html");
 
+        current = this;
         startDiscovery();
         watchNetwork();
+        SyncJob.schedule(this);   // about every 15 min on Wi-Fi, even when closed
+    }
+
+    /** The background sync rewrote the tasks file: let the open page pick it up. */
+    static void reloadIfOpen() {
+        MainActivity a = current;
+        if (a != null) a.js("window.workloadReload && window.workloadReload()");
     }
 
     @Override
@@ -112,6 +121,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (current == this) current = null;
         try { if (discovery != null) nsd.stopServiceDiscovery(discovery); } catch (Exception ignored) {}
         try { if (multicast != null && multicast.isHeld()) multicast.release(); } catch (Exception ignored) {}
         try {
@@ -170,7 +180,7 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void save(String text) {
-            io.execute(() -> {
+            io.execute(() -> { synchronized (SyncJob.class) {
                 File tmp = new File(getFilesDir(), "state.tmp");
                 try (FileOutputStream o = new FileOutputStream(tmp)) {
                     o.write(text.getBytes(StandardCharsets.UTF_8));
@@ -179,7 +189,14 @@ public class MainActivity extends Activity {
                 }
                 //noinspection ResultOfMethodCallIgnored
                 tmp.renameTo(new File(getFilesDir(), "state.json"));
-            });
+            } });
+        }
+
+        /** Shown on other devices as "removed by …". */
+        @JavascriptInterface
+        public String deviceName() {
+            String m = android.os.Build.MODEL;
+            return m == null || m.isEmpty() ? "Android phone" : m;
         }
 
         @JavascriptInterface

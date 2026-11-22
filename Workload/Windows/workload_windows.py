@@ -161,6 +161,18 @@ class Api:
         except Exception:
             return None
 
+    def musiplex_workload(self) -> dict | None:
+        """The hub Musiplex on this PC says to sync with (no PIN): {"host","port","token","name","via"}."""
+        try:
+            req = urllib.request.Request("http://127.0.0.1:7860/local/workload", headers={"X-Musiplex": "1"})
+            with urllib.request.urlopen(req, timeout=1.5) as r:
+                return json.loads(r.read())
+        except Exception:
+            return None
+
+    def device_name(self) -> str:
+        return socket.gethostname() or "Windows PC"
+
     def open_main(self) -> None:
         self._app.show_main()
 
@@ -344,6 +356,8 @@ class SelftestApi:
     def save(self, text): pass
     def discover(self): return []
     def musiplex_local(self): return None
+    def musiplex_workload(self): return None
+    def device_name(self): return "selftest"
     def open_main(self): pass
     def quit(self): pass
 

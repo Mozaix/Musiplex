@@ -1047,6 +1047,26 @@ function viewSettings(c) {
       if (t.suggested.length) { ta.appendChild(h(`<div class="kv" style="margin-top:8px"><span>Suggested for you · in your library, not played yet</span><span></span></div>`)); const box = h(`<div style="margin:0 -16px"></div>`); ta.appendChild(box); rows(box, t.suggested.filter(i => byId[i])); }
     }).catch(() => { ta.querySelector(".note").textContent = "Couldn't load."; });
   }
+  // Workload (this computer is the hub): Toddle link, checked every 15 minutes
+  if (local) {
+    const w = card(c, "cal", "Workload");
+    const body = h(`<div><div class="note" style="margin-bottom:8px">This computer keeps your Workload tasks. Workload here connects by itself (no PIN); phones pair with this computer's PIN. Tasks show in the notch's Calendar tab.</div>
+      <div class="kv"><span>Toddle calendar link</span><span id="tdset" class="dim"></span></div>
+      <div style="display:flex;gap:8px;margin-top:4px"><input id="tdurl" placeholder="Paste the link (Toddle on the web → Calendar → Subscribe → Others)"><button class="btn small" id="tdsave">Save</button><button class="btn small red hidden" id="tdrm">Remove</button></div>
+      <div class="note" id="tdstatus"></div></div>`);
+    w.appendChild(body);
+    const draw = r => {
+      body.querySelector("#tdset").textContent = r.set ? `Saved: ${r.link}` : "Not set";
+      body.querySelector("#tdrm").classList.toggle("hidden", !r.set);
+      const st = r.status || {};
+      body.querySelector("#tdstatus").textContent = !r.set ? "Checked every 15 minutes once set. The link stays on this computer." :
+        st.checked ? (st.ok ? `Checked ${new Date(st.checked * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}: ${st.found} upcoming deadlines, ${st.added} new, ${st.removed} removed.` : `Last check failed: ${st.error}. Is the link still valid?`) : "Checking…";
+    };
+    const load = () => L.get("/local/toddle").then(draw).catch(() => {});
+    body.querySelector("#tdsave").onclick = () => { const u = body.querySelector("#tdurl").value.trim(); if (!u) return; L.post("/local/toddle", { url: u }).then(r => { if (r.error) return toast(r.error); body.querySelector("#tdurl").value = ""; draw(r); setTimeout(load, 3000); }); };
+    body.querySelector("#tdrm").onclick = () => L.post("/local/toddle", { url: "" }).then(draw);
+    load();
+  }
   // History (desktop: inside Settings like the Mac)
   if (wide()) { const hc = card(c, "clock", "Version History"); const box = h(`<div style="margin:0 -16px;max-height:420px;overflow-y:auto"></div>`); hc.appendChild(box); viewHistory(box); box.querySelector("h1") && box.querySelector("h1").remove(); }
   // Windows app
@@ -1061,7 +1081,7 @@ function viewSettings(c) {
     });
   }
   const ab = card(c, "note", "About");
-  ab.appendChild(h(`<div class="note">Musiplex 2.3 · ${ANDROID ? "Android" : local && local.windows ? "Windows" : "Desktop"}. Nothing about you is built into the app: the server's PIN and key are made on it, and this ${myWord}'s ID is made here.</div>`));
+  ab.appendChild(h(`<div class="note">Musiplex 2.4 · ${ANDROID ? "Android" : local && local.windows ? "Windows" : "Desktop"}. Nothing about you is built into the app: the server's PIN and key are made on it, and this ${myWord}'s ID is made here.</div>`));
 }
 async function importFolder() {
   let path = null;
@@ -1402,6 +1422,17 @@ function taskDays(list) {
   const none = open.filter(t => !t.due); if (none.length) out.push({ title: "No date", items: none });
   return out;
 }
+// Windows: Musiplex only looks for tasks when Workload is installed (ticked in the installer
+// or added later); otherwise the Calendar shows how to get it.
+async function workloadMissing() {
+  if (api && api.workload_installed) { try { return !(await api.workload_installed()); } catch { return false; } }
+  return false;
+}
+function drawGetWorkload(c) {
+  const d = h(`<div class="empty" style="padding:24px 16px">${icon("cal")}<b style="color:#fff;font-size:15px">Add Workload for your tasks</b><div style="margin:8px auto 12px;max-width:360px;text-align:left;font-size:13px">1. Download the Musiplex installer and tick Workload.<br>2. Open Workload once: it connects to Musiplex by itself.<br>3. Your deadlines show up here, by day.</div><button class="btn primary" style="display:inline-flex;flex:none">Get Workload</button></div>`);
+  d.querySelector("button").onclick = () => openURL("https://github.com/Mozaix/Musiplex/releases/latest");
+  c.appendChild(d);
+}
 function drawTasks(c, list) {
   if (list === null) return empty(c, "cal", local || ANDROID ? "No tasks here yet. Tasks from Workload show up once its server has them (the Linux server keeps them)." : "Connect to the server that keeps your Workload tasks.");
   const days = taskDays(list);
@@ -1419,6 +1450,7 @@ function drawTasks(c, list) {
 function viewCalendar(c) {
   title(c, "Calendar");
   const box = h(`<div></div>`); c.appendChild(box);
+  workloadMissing().then(missing => { if (missing && box.isConnected) { box.innerHTML = ""; drawGetWorkload(box); } });
   if (tasksCache) drawTasks(box, tasksCache); else box.innerHTML = `<div class="empty">Loading…</div>`;
   if (Date.now() - tasksAt > 10000) loadTasks(list => { if (route.v === "calendar" && box.isConnected) { box.innerHTML = ""; drawTasks(box, list); } });
 }
@@ -1484,8 +1516,12 @@ function drawNotch() {
   if (notchTab === "calendar") {
     p.innerHTML = "";
     const show = list => { if (notchTab !== "calendar") return; p.innerHTML = ""; const box = h(`<div></div>`); p.appendChild(box); drawTasks(box, list); };
-    if (tasksCache) show(tasksCache); else p.innerHTML = `<div class="empty" style="padding:30px">Loading…</div>`;
-    if (Date.now() - tasksAt > 10000) loadTasks(show);
+    workloadMissing().then(missing => {
+      if (notchTab !== "calendar") return;
+      if (missing) { p.innerHTML = ""; drawGetWorkload(p); return; }
+      if (tasksCache) show(tasksCache); else p.innerHTML = `<div class="empty" style="padding:30px">Loading…</div>`;
+      if (Date.now() - tasksAt > 10000) loadTasks(show);
+    });
     return;
   }
   if (notchTab === "files") {
