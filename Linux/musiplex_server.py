@@ -875,6 +875,16 @@ class Server:
             return web.Response(status=404, text="Musiplex app page is missing")
         return web.FileResponse(page, headers={"Cache-Control": "no-store", "Content-Type": "text/html; charset=utf-8"})
 
+    async def workload_page(self, request):
+        """Workload (school tasks) as an app window on Linux: its page, served from here."""
+        import sys as _sys
+        here = Path(__file__).resolve().parent
+        for p in (Path(getattr(_sys, "_MEIPASS", here)) / "workload.html", here / "workload.html",
+                  here.parent / "Workload" / "Web" / "workload.html"):
+            if p.is_file():
+                return web.FileResponse(p, headers={"Cache-Control": "no-store", "Content-Type": "text/html; charset=utf-8"})
+        return web.Response(status=404, text="Workload isn't installed here")
+
     async def local_token(self, request):
         """The app window on this computer signs in without a PIN."""
         if not self.local(request):
@@ -1420,6 +1430,7 @@ class Server:
         http.router.add_get("/local/art/{id}", self.local_art)
         http.router.add_post("/local/cmd", self.local_cmd)
         http.router.add_get("/app", self.app_page)
+        http.router.add_get("/workload", self.workload_page)
         http.router.add_get("/local/token", self.local_token)
         http.router.add_post("/local/ui", self.local_ui)
         http.router.add_route("*", "/local/folders", self.local_folders)

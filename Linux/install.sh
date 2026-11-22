@@ -13,6 +13,24 @@ install -m 755 "$here/musiplex_server.py" "$dest/musiplex_server.py"
 install -m 644 "$here/workload_tasks.py" "$dest/workload_tasks.py"
 # The app window (shared with Android and Windows).
 install -m 644 "$here/../Client/musiplex.html" "$dest/musiplex.html"
+# Workload (school tasks): its page and window launcher, when it's in this checkout.
+if [[ -f "$here/../Workload/Web/workload.html" ]]; then
+  mkdir -p "$HOME/.local/share/applications" "$HOME/.local/share/icons/hicolor/256x256/apps"
+  install -m 644 "$here/../Workload/Web/workload.html" "$dest/workload.html"
+  install -m 755 "$here/workload-open" "$dest/workload-open"
+  install -m 644 "$here/../Workload/Windows/workload.png" "$HOME/.local/share/icons/hicolor/256x256/apps/workload.png"
+  cat > "$HOME/.local/share/applications/workload.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Workload
+Comment=School tasks and deadlines, synced through Musiplex
+Exec=$dest/workload-open
+Icon=workload
+Terminal=false
+Categories=Office;Education;
+StartupWMClass=Workload
+DESKTOP
+fi
 install -m 755 "$here/musiplex-open" "$dest/musiplex-open"
 
 # App menu / taskbar launcher.
