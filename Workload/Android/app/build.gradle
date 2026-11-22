@@ -1,0 +1,51 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.musiplex.workload"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.musiplex.workload"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    // Release signing: the same key as Musiplex when the build has it (so updates install
+    // over the old app), else the build machine's throwaway debug key.
+    def ks = System.getenv("MUSIPLEX_KEYSTORE")
+    signingConfigs {
+        release {
+            if (ks) {
+                storeFile file(ks)
+                storeType "pkcs12"
+                storePassword System.getenv("MUSIPLEX_KEYSTORE_PASSWORD")
+                keyAlias "musiplex"
+                keyPassword System.getenv("MUSIPLEX_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig ks ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// The app's page is shared with Workload for Windows: ../Web/workload.html.
+tasks.register("copyWeb", Copy) {
+    from(rootProject.file("../Web/workload.html"))
+    into("src/main/assets")
+    rename { "index.html" }
+}
+preBuild.dependsOn copyWeb

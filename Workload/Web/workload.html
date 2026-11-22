@@ -1,0 +1,853 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Workload</title>
+<!--
+  Workload for Windows and Android: the same app as on iPhone and Mac, in one page.
+  Tasks (Task name · Due · Urgency), Entries (one assignment per line), Sync (pair with
+  Musiplex by PIN), and a companion view (#companion) with what Musiplex is playing.
+
+  The page talks to its shell through `window.host` (set up at the bottom):
+    Windows: pywebview's window.pywebview.api (Windows/workload_windows.py)
+    Android: the `Android` JavaScript interface (Android/…/MainActivity.java)
+    Browser: fetch + localStorage (for testing, served from the same server)
+-->
+<style>
+:root {
+  --page: #ffffff; --sidebar: #f7f7f5; --text: #37352f; --secondary: #787774; --tertiary: #a5a29a;
+  --divider: #e9e9e7; --hover: #f1f1ef; --accent: #2383e2; --overdue: #d44c47;
+  --g-bg: #dbeddb; --g-tx: #1c3829; --g-dot: #448361;
+  --y-bg: #fdecc8; --y-tx: #402c1b; --y-dot: #cb912f;
+  --r-bg: #ffe2dd; --r-tx: #5d1715; --r-dot: #d44c47;
+  --shadow: 0 0 0 1px rgba(15,15,15,.05), 0 3px 6px rgba(15,15,15,.1), 0 9px 24px rgba(15,15,15,.2);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #191919; --sidebar: #202020; --text: #d4d4d4; --secondary: #9b9b9b; --tertiary: #5a5a5a;
+    --divider: #2f2f2f; --hover: #252525; --accent: #529cca; --overdue: #e57370;
+    --g-bg: #2b593f; --g-tx: #e6f0e6; --g-dot: #6bb28c;
+    --y-bg: #89632a; --y-tx: #fbefd9; --y-dot: #e0b25b;
+    --r-bg: #6e3630; --r-tx: #fce4e0; --r-dot: #e57370;
+    --shadow: 0 0 0 1px rgba(255,255,255,.08), 0 3px 6px rgba(0,0,0,.4), 0 9px 24px rgba(0,0,0,.5);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--page); color: var(--text);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Segoe UI Variable", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-tap-highlight-color: transparent; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+input { font: inherit; color: inherit; background: none; border: 0; outline: none; padding: 0; min-width: 0; }
+input::placeholder { color: var(--tertiary); }
+#app { display: flex; height: 100%; }
+
+/* sidebar (wide) / tab bar (narrow) */
+nav { width: 220px; flex: none; background: var(--sidebar); padding: 14px 8px; }
+nav .ws { font-size: 12px; font-weight: 600; color: var(--secondary); padding: 4px 10px 8px; }
+nav button { display: flex; gap: 8px; align-items: center; width: 100%; padding: 5px 10px; border-radius: 5px; color: var(--secondary); text-align: left; }
+nav button:hover { background: var(--hover); }
+nav button.on { background: var(--hover); color: var(--text); font-weight: 500; }
+main { flex: 1; overflow-y: auto; }
+.pagebody { max-width: 900px; margin: 0 auto; padding: 48px 48px 60px; }
+@media (max-width: 700px) {
+  #app { flex-direction: column-reverse; }
+  nav { width: auto; display: flex; padding: 4px 6px calc(4px + env(safe-area-inset-bottom)); border-top: 1px solid var(--divider); background: var(--page); }
+  nav .ws { display: none; }
+  nav button { flex-direction: column; gap: 0; font-size: 11px; padding: 6px 0; justify-content: center; text-align: center; }
+  nav button.on { background: none; }
+  nav button .ic { font-size: 20px; }
+  .pagebody { padding: calc(14px + env(safe-area-inset-top)) 18px 40px; }
+}
+
+/* page header */
+.icon { font-size: 52px; line-height: 1.1; }
+h1 { font-size: 34px; font-weight: 700; margin: 6px 0 2px; letter-spacing: -.01em; }
+.sub { color: var(--secondary); font-size: 13px; }
+.badge { display: flex; align-items: center; gap: 6px; color: var(--secondary); font-size: 12px; margin: 10px 0 18px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
+
+/* database table */
+.row { display: flex; align-items: center; border-bottom: 1px solid var(--divider); min-height: 38px; }
+.row:hover { background: var(--hover); }
+.row.head:hover { background: none; }
+.row.head { font-size: 13px; color: var(--secondary); min-height: 34px; }
+.row.head svg { width: 12px; height: 12px; fill: var(--tertiary); margin-right: 5px; vertical-align: -1px; }
+.c-check { width: 30px; flex: none; display: flex; }
+.c-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
+.c-name input { width: 100%; font-weight: 500; }
+.c-due { width: 170px; flex: none; font-size: 13px; }
+.c-urg { width: 120px; flex: none; }
+@media (max-width: 700px) { .c-due { width: 96px; } .c-urg { width: 90px; } }
+.check { width: 16px; height: 16px; border: 1.5px solid var(--tertiary); border-radius: 3px; display: grid; place-items: center; }
+.check.on { background: var(--accent); border-color: var(--accent); }
+.check.on::after { content: ""; width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg) translate(-1px, -1px); }
+.done input { color: var(--tertiary); text-decoration: line-through; }
+.due-btn { color: var(--text); text-align: left; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.due-btn.none { color: var(--tertiary); }
+.due-btn.late { color: var(--overdue); }
+.src { font-size: 11px; color: var(--secondary); background: var(--hover); border-radius: 3px; padding: 0 5px; flex: none; }
+.newrow { color: var(--tertiary); gap: 8px; }
+.newrow input { color: var(--text); }
+.more { color: var(--secondary); font-size: 13px; margin-top: 12px; }
+
+/* tags */
+.tag { display: inline-block; font-size: 13px; line-height: 20px; padding: 0 7px; border-radius: 3px; white-space: nowrap; }
+.tag.green { background: var(--g-bg); color: var(--g-tx); } .tag.yellow { background: var(--y-bg); color: var(--y-tx); } .tag.red { background: var(--r-bg); color: var(--r-tx); }
+.udot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.udot.green { background: var(--g-dot); } .udot.yellow { background: var(--y-dot); } .udot.red { background: var(--r-dot); }
+
+/* menus and popovers */
+.pop { position: fixed; z-index: 10; background: var(--page); border-radius: 6px; box-shadow: var(--shadow); padding: 6px; min-width: 180px; }
+.pop .item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border-radius: 4px; text-align: left; }
+.pop .item:hover { background: var(--hover); }
+.pop .hint { font-size: 12px; color: var(--secondary); padding: 4px 8px; }
+.pop input[type=date], .pop input[type=datetime-local] { border: 1px solid var(--divider); border-radius: 4px; padding: 5px 8px; width: 100%; color-scheme: light dark; }
+.pop label { display: flex; align-items: center; gap: 6px; font-size: 13px; padding: 8px 2px; }
+.pop .btns { display: flex; justify-content: space-between; padding-top: 4px; }
+.btn { padding: 4px 10px; border-radius: 4px; font-size: 14px; }
+.btn:hover { background: var(--hover); }
+.btn.primary { background: var(--accent); color: #fff; }
+.btn.danger { color: var(--overdue); }
+
+/* entries */
+.entry { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.entry input { flex: 1; font-size: 17px; }
+.entry.done input { color: var(--tertiary); text-decoration: line-through; }
+.dotbtn { width: 22px; height: 22px; display: grid; place-items: center; flex: none; border-radius: 4px; }
+.dotbtn:hover { background: var(--hover); }
+.preview { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--secondary); margin: 0 0 4px 30px; }
+
+/* sync */
+.section { margin-top: 24px; }
+.section h3 { font-size: 13px; font-weight: 600; color: var(--secondary); margin: 0 0 8px; padding-bottom: 8px; border-bottom: 1px solid var(--divider); }
+.kv { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; }
+.kv span:first-child { color: var(--secondary); }
+.kv input { text-align: right; }
+.server { display: flex; gap: 8px; align-items: center; width: 100%; padding: 7px 4px; border-radius: 4px; text-align: left; }
+.server:hover { background: var(--hover); }
+.server small { margin-left: auto; color: var(--tertiary); }
+.field { border: 1px solid var(--divider); border-radius: 4px; padding: 5px 8px; }
+.err { color: var(--overdue); font-size: 13px; margin-top: 6px; }
+
+/* now playing */
+.np { display: flex; align-items: center; gap: 10px; background: var(--hover); border-radius: 8px; padding: 10px; margin-bottom: 14px; }
+.np .art { width: 46px; height: 46px; border-radius: 6px; background: var(--divider) center/cover; flex: none; display: grid; place-items: center; color: var(--tertiary); }
+.np .t { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np .a { font-size: 12px; color: var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np .bar { height: 3px; background: var(--divider); border-radius: 2px; margin-top: 5px; overflow: hidden; }
+.np .bar div { height: 100%; background: var(--text); }
+.np .ctl { display: flex; gap: 12px; margin-left: auto; }
+.np .ctl button { width: 22px; height: 22px; display: grid; place-items: center; }
+.np .ctl svg { width: 14px; height: 14px; fill: var(--text); }
+.np .info { min-width: 0; flex: 1; }
+
+/* companion (Windows tray window) */
+body.companion nav { display: none; }
+body.companion .pagebody { padding: 14px; }
+.cap { font-size: 11px; font-weight: 600; color: var(--secondary); letter-spacing: .04em; margin-bottom: 6px; }
+.up { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--divider); }
+.up .t { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.up .d { font-size: 11px; color: var(--secondary); }
+.up .d.late { color: var(--overdue); }
+.up .info { flex: 1; min-width: 0; }
+.quick { display: flex; gap: 6px; align-items: center; background: var(--hover); border-radius: 6px; padding: 8px; margin-top: 12px; color: var(--tertiary); }
+.quick input { flex: 1; color: var(--text); font-size: 13px; }
+.chead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.chead b { font-size: 15px; }
+.chead .badge { margin: 0; }
+.foot { display: flex; justify-content: space-between; font-size: 12px; color: var(--secondary); margin-top: 12px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <nav id="nav"></nav>
+  <main id="main"></main>
+</div>
+<div id="layer"></div>
+<script>
+"use strict";
+
+// ---------------------------------------------------------------- dates
+
+const pad = n => String(n).padStart(2, "0");
+const dayStr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const dueStr = (d, hasTime) => hasTime ? `${dayStr(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}` : dayStr(d);
+function parseDue(s) {
+  if (!s) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/.exec(s);
+  if (!m) return null;
+  return new Date(+m[1], +m[2] - 1, +m[3], m[4] ? +m[4] : 0, m[5] ? +m[5] : 0);
+}
+const startOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n, d.getHours(), d.getMinutes());
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const fmtTime = d => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+function dueLabel(t) {
+  const d = parseDue(t.due);
+  if (!d) return "No date";
+  const hasTime = t.due.includes("T");
+  const time = hasTime ? " " + fmtTime(d) : "";
+  const days = Math.round((startOfDay(d) - startOfDay(new Date())) / 86400000);
+  if (days === 0) return "Today" + time;
+  if (days === 1) return "Tomorrow" + time;
+  if (days === -1) return "Yesterday" + time;
+  if (days > 0 && days < 7) return d.toLocaleDateString([], { weekday: "long" }) + time;
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString([], sameYear ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" }) + time;
+}
+function isOverdue(t) {
+  const d = parseDue(t.due);
+  if (!d || t.done) return false;
+  return (t.due.includes("T") ? d : addDays(startOfDay(d), 1)) < new Date();
+}
+
+// ---------------------------------------------------------------- entry parser
+// "Essay draft - Friday 11pm", "Math worksheet, Dec 3", "Lab report 12/4", "Bio quiz tomorrow urgent"
+
+const MONTH_RE = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?";
+const WEEKDAY_RE = "(sun(?:day)?|mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?)";
+const TIME_RE = "(?:\\s*(?:at\\s+|@\\s*)?(?:(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm|a\\.m\\.|p\\.m\\.)|(\\d{1,2}):(\\d{2})|(noon|midnight)))?";
+const DATE_PATTERNS = [
+  { re: new RegExp(`\\b(today|tonight|tomorrow|tmrw|tmr)\\b${TIME_RE}`, "i"), kind: "rel" },
+  { re: new RegExp(`\\bin\\s+(\\d{1,3})\\s+days?\\b${TIME_RE}`, "i"), kind: "in" },
+  { re: new RegExp(`\\b(next\\s+|this\\s+)?${WEEKDAY_RE}\\b${TIME_RE}`, "i"), kind: "wd" },
+  { re: new RegExp(`\\b${MONTH_RE}\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?:,?\\s+(\\d{4})\\b)?${TIME_RE}`, "i"), kind: "md" },
+  { re: new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH_RE}(?:,?\\s+(\\d{4})\\b)?${TIME_RE}`, "i"), kind: "dm" },
+  { re: new RegExp(`\\b(\\d{4})-(\\d{1,2})-(\\d{1,2})\\b${TIME_RE}`, "i"), kind: "iso" },
+  { re: new RegExp(`\\b(\\d{1,2})/(\\d{1,2})(?:/(\\d{2,4}))?\\b${TIME_RE}`, "i"), kind: "num" },
+  { re: /\b(?:at\s+|@\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)(?![a-z])|\b(noon|midnight)\b/i, kind: "time" },
+];
+
+function applyTime(d, g, i) {
+  // g[i..i+5]: h, min, ampm, h24, min24, word
+  const [h, mi, ap, h24, m24, word] = g.slice(i, i + 6);
+  if (word) { const w = word.toLowerCase(); d.setHours(w === "noon" ? 12 : 23, w === "noon" ? 0 : 59, 0, 0); return true; }
+  if (h24 !== undefined && h24 !== null && m24 !== undefined) { d.setHours(+h24, +m24, 0, 0); return true; }
+  if (h) {
+    let hh = +h % 12; if (/p/i.test(ap)) hh += 12;
+    d.setHours(hh, mi ? +mi : 0, 0, 0); return true;
+  }
+  return false;
+}
+
+/** Finds the first date in s: {index, length, date, hasTime, explicitYear}. */
+function findDate(s, now = new Date()) {
+  let best = null;
+  for (const p of DATE_PATTERNS) {
+    const m = p.re.exec(s);
+    if (!m || (best && m.index >= best.index)) continue;
+    const today = startOfDay(now);
+    let d = null, ti = 0, year = false;
+    if (p.kind === "rel") {
+      const w = m[1].toLowerCase();
+      d = w.startsWith("tom") || w.startsWith("tm") ? addDays(today, 1) : new Date(today);
+      ti = 2;
+    } else if (p.kind === "in") { d = addDays(today, +m[1]); ti = 2; }
+    else if (p.kind === "wd") {
+      const target = WEEKDAYS.indexOf(m[2].slice(0, 3).toLowerCase());
+      let diff = (target - today.getDay() + 7) % 7;
+      if (m[1] && /next/i.test(m[1])) diff += 7;
+      d = addDays(today, diff); ti = 3;
+    } else if (p.kind === "md" || p.kind === "dm") {
+      const mon = MONTHS.indexOf((p.kind === "md" ? m[1] : m[2]).slice(0, 3).toLowerCase());
+      const day = +(p.kind === "md" ? m[2] : m[1]);
+      year = !!m[3];
+      if (day < 1 || day > 31) continue;
+      d = new Date(m[3] ? +m[3] : now.getFullYear(), mon, day); ti = 4;
+    } else if (p.kind === "iso") {
+      d = new Date(+m[1], +m[2] - 1, +m[3]); year = true; ti = 4;
+    } else if (p.kind === "num") {
+      const mon = +m[1], day = +m[2];
+      if (mon < 1 || mon > 12 || day < 1 || day > 31) continue;
+      let y = m[3] ? +m[3] : now.getFullYear(); if (y < 100) y += 2000;
+      year = !!m[3]; d = new Date(y, mon - 1, day); ti = 4;
+    } else if (p.kind === "time") {
+      d = new Date(today);
+      const hasTime = m[4] ? applyTime(d, [null, null, null, null, null, m[4]], 0) : applyTime(d, [m[1], m[2], m[3], null, null, null], 0);
+      best = { index: m.index, length: m[0].length, date: d, hasTime, explicitYear: false };
+      continue;
+    }
+    const hasTime = applyTime(d, m, ti);
+    best = { index: m.index, length: m[0].length, date: d, hasTime, explicitYear: year };
+  }
+  if (best && !best.explicitYear && best.date < addDays(startOfDay(now), -7)) {
+    best.date = new Date(best.date.getFullYear() + 1, best.date.getMonth(), best.date.getDate(), best.date.getHours(), best.date.getMinutes());
+  }
+  return best;
+}
+
+const SEP_TRIM = /^[\s,\-–—:|·]+|[\s,\-–—:|·]+$/g;
+function parseEntry(raw, now = new Date()) {
+  let text = raw.trim(), urgency = null;
+  const rules = [[/[\s,\-–—]*\bnot\s+urgent\s*$/i, "green"], [/[\s,\-–—]*\burgent\s*$/i, "red"],
+                 [/[\s,\-–—]*\bred\s*$/i, "red"], [/[\s,\-–—]*\byellow\s*$/i, "yellow"], [/[\s,\-–—]*\bgreen\s*$/i, "green"]];
+  for (const [re, u] of rules) { if (re.test(text)) { text = text.replace(re, ""); urgency = u; break; } }
+
+  // "Title - date" / "Title, date": the part after the last separator, if it's (mostly) a date.
+  const seps = [...text.matchAll(/\s*(,|\s-\s|\s–\s|\s—\s|\|)\s*/g)];
+  if (seps.length) {
+    const last = seps[seps.length - 1];
+    const tail = text.slice(last.index + last[0].length);
+    const f = findDate(tail, now);
+    if (f) {
+      const leftover = (tail.slice(0, f.index) + tail.slice(f.index + f.length)).replace(/\b(due|on|by|at)\b/gi, "").replace(SEP_TRIM, "");
+      if (leftover.length <= 3) {
+        return { title: text.slice(0, last.index).replace(SEP_TRIM, ""), due: dueStr(f.date, f.hasTime), urgency };
+      }
+    }
+  }
+  const f = findDate(text, now);
+  if (f) {
+    let title = text.slice(0, f.index) + " " + text.slice(f.index + f.length);
+    title = title.replace(/\s+(due|on|by|at)\s*$/i, "").replace(/\s{2,}/g, " ").replace(SEP_TRIM, "");
+    return { title, due: dueStr(f.date, f.hasTime), urgency };
+  }
+  return { title: text.replace(SEP_TRIM, ""), due: null, urgency };
+}
+
+// ---------------------------------------------------------------- store
+
+const URG = { green: "Not urgent", yellow: "Soon", red: "Urgent" };
+const URG_RANK = { red: 0, yellow: 1, green: 2 };
+const nowSec = () => Date.now() / 1000;
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+  const r = Math.random() * 16 | 0; return (c === "x" ? r : (r & 3 | 8)).toString(16); })).toUpperCase();
+
+const state = { tasks: [], prefs: {} };
+let editCount = 0;
+
+function save() { host.save(JSON.stringify(state)); }
+function visibleTasks() {
+  return state.tasks.filter(t => !t.deleted).sort((a, b) => {
+    if (a.done !== b.done) return a.done ? 1 : -1;
+    const da = parseDue(a.due), db = parseDue(b.due);
+    if (da && db && +da !== +db) return da - db;
+    if (da && !db) return -1;
+    if (!da && db) return 1;
+    if (a.urgency !== b.urgency) return URG_RANK[a.urgency] - URG_RANK[b.urgency];
+    return a.title.localeCompare(b.title);
+  });
+}
+const entries = () => state.tasks.filter(t => !t.deleted && t.source === "manual");
+const find = id => state.tasks.find(t => t.id === id);
+
+function changed() { editCount++; save(); render(); schedulePush(); }
+function addTask(text, urgency = "green") {
+  const p = parseEntry(text);
+  if (!p.title) return null;
+  const t = { id: uuid(), title: p.title, due: p.due, urgency: p.urgency || urgency, done: false, source: "manual", updated: nowSec(), deleted: false };
+  state.tasks.push(t); changed(); return t;
+}
+function update(id, fn) {
+  const t = find(id); if (!t) return;
+  const before = JSON.stringify(t); fn(t);
+  if (JSON.stringify(t) === before) return;
+  t.updated = nowSec(); changed();
+}
+function setText(id, text) {
+  const p = parseEntry(text);
+  if (!p.title) return remove(id);
+  update(id, t => { t.title = p.title; t.due = p.due; if (p.urgency) t.urgency = p.urgency; });
+}
+function remove(id) { update(id, t => { t.deleted = true; t.title = ""; }); }
+function merge(incoming) {
+  let did = false;
+  for (const t of incoming || []) {
+    if (!t || !t.id) continue;
+    const mine = find(t.id);
+    if (!mine) { state.tasks.push(t); did = true; }
+    else if ((mine.updated || 0) < (t.updated || 0)) { Object.assign(mine, t); did = true; }
+  }
+  if (did) { save(); render(); }
+}
+
+// ---------------------------------------------------------------- sync with Musiplex
+
+const sync = { status: "notPaired", detail: "", at: null, found: [], busy: false };
+const P = () => state.prefs;
+const bracket = h => h.includes(":") ? `[${h}]` : h;
+
+async function syncNow() {
+  if (!P().token || sync.busy) return;
+  sync.busy = true;
+  if (sync.status !== "synced") { sync.status = "syncing"; renderBadge(); }
+  const hosts = [];
+  const seen = sync.found.find(s => s.name === P().serverName);
+  if (seen) hosts.push(seen.ip);
+  for (const h of [P().serverHost, P().awayHost]) if (h && !hosts.includes(h)) hosts.push(h);
+  let why = "Server not reachable";
+  const sentAt = editCount;
+  for (const h of hosts) {
+    try {
+      const r = await host.request("POST", `http://${bracket(h)}:${P().serverPort || 7860}/tasks?t=${P().token}`, JSON.stringify({ tasks: state.tasks }));
+      if (r.status === 404) { why = "This Musiplex server doesn't have tasks yet"; continue; }
+      if (r.status === 401) { why = "The server's key changed: pair again"; continue; }
+      if (r.status !== 200) continue;
+      merge(JSON.parse(r.text).tasks);
+      if (h !== P().serverHost && h !== P().awayHost) { P().serverHost = h; save(); }
+      sync.status = "synced"; sync.at = new Date(); sync.busy = false; renderBadge();
+      if (editCount !== sentAt) schedulePush();
+      return;
+    } catch (e) { /* try the next address */ }
+  }
+  sync.status = "offline"; sync.detail = why; sync.busy = false; renderBadge();
+}
+let pushTimer = null;
+function schedulePush() { clearTimeout(pushTimer); pushTimer = setTimeout(syncNow, 1000); }
+
+async function pair(server, pin) {
+  const port = server.http || 7860;
+  let r;
+  try { r = await host.request("GET", `http://${bracket(server.ip)}:${port}/pair?pin=${pin.replace(/\D/g, "")}`, null); }
+  catch (e) { throw new Error("Couldn't reach that server. Is it on and on the same Wi‑Fi?"); }
+  if (r.status === 401) throw new Error("That PIN didn't work. It's in the Musiplex window on the server.");
+  if (r.status !== 200) throw new Error("Couldn't reach that server. Is it on and on the same Wi‑Fi?");
+  const p = JSON.parse(r.text);
+  Object.assign(P(), { token: p.token, serverHost: server.ip, serverPort: port, serverName: p.name || server.name });
+  if (!P().awayHost) { const ts = (p.hosts || []).find(h => h.startsWith("100.") && h !== server.ip); if (ts) P().awayHost = ts; }
+  save();
+  sync.status = "syncing";
+  await syncNow();
+  nowPlaying.restart();
+  if (sync.status === "offline" && sync.detail.includes("tasks")) throw new Error("Paired, but this Musiplex server doesn't have tasks yet. Update Musiplex on it.");
+}
+function unpair() {
+  for (const k of ["token", "serverHost", "serverPort", "serverName"]) delete P()[k];
+  save(); sync.status = "notPaired"; render(); nowPlaying.restart();
+}
+
+/** Windows with Musiplex on the same PC: use it without a PIN, unless another
+ *  Musiplex server is on the Wi‑Fi (that one is probably the hub; pick it in Sync). */
+async function autoPairLocal() {
+  if (P().token || !host.musiplexLocal) return;
+  const local = await host.musiplexLocal().catch(() => null);
+  if (!local || !local.token) return;
+  await new Promise(r => setTimeout(r, 6000));
+  await refreshServers();
+  if (P().token || sync.found.some(s => s.name !== local.name)) return;
+  Object.assign(P(), { token: local.token, serverHost: "127.0.0.1", serverPort: local.http || 7860, serverName: local.name || "This PC" });
+  save(); sync.status = "syncing"; render(); syncNow();
+}
+
+async function refreshServers() {
+  try {
+    const list = await host.discover();
+    const wasMissing = !sync.found.some(s => s.name === P().serverName);
+    sync.found = (list || []).sort((a, b) => a.name.localeCompare(b.name));
+    if (page === "sync") render();
+    if (wasMissing && sync.found.some(s => s.name === P().serverName)) syncNow();   // just came home
+  } catch (e) {}
+}
+
+// ---------------------------------------------------------------- now playing (Musiplex WebSocket, as a "panel")
+
+const nowPlaying = {
+  song: null, playing: false, pos: 0, posAt: Date.now(), connected: false, where: "", titles: {}, target: null, ws: null, seq: 1000 + Math.floor(Math.random() * 90000),
+  get elapsed() { return this.playing ? this.pos + (Date.now() - this.posAt) / 1000 : this.pos; },
+  async pick() {
+    const local = host.musiplexLocal ? await host.musiplexLocal().catch(() => null) : null;
+    if (local && local.token) { this.where = "This computer"; return { host: "127.0.0.1", http: local.http || 7860, ws: local.ws || 7861, token: local.token }; }
+    if (P().token && P().serverHost) { this.where = P().serverName || P().serverHost; const http = P().serverPort || 7860; return { host: P().serverHost, http, ws: http + 1, token: P().token }; }
+    return null;
+  },
+  async start() {
+    if (this.ws) return;
+    const t = await this.pick();
+    this.target = t;
+    if (!t) { this.connected = false; renderNow(); return this.retry(); }
+    let ws;
+    try { ws = new WebSocket(`ws://${bracket(t.host)}:${t.ws}/`); } catch (e) { return this.retry(); }
+    this.ws = ws;
+    ws.onopen = () => {
+      if (!P().deviceID) { P().deviceID = "workload-" + uuid().slice(0, 8); save(); }
+      ws.send(JSON.stringify({ type: "hello", token: t.token, deviceID: P().deviceID, name: "Workload", kind: "panel" }));
+      this.loadCatalog(t);
+    };
+    ws.onmessage = e => { try { this.handle(JSON.parse(e.data)); } catch (_) {} };
+    ws.onclose = ws.onerror = () => { if (this.ws === ws) { this.ws = null; this.connected = false; renderNow(); this.retry(); } };
+  },
+  retry() { clearTimeout(this.rt); this.rt = setTimeout(() => this.start(), 10000); },
+  restart() { const w = this.ws; this.ws = null; if (w) try { w.close(); } catch (_) {} this.start(); },
+  handle(m) {
+    if (m.type === "welcome" || m.type === "state" || m.type === "promoted") {
+      this.connected = true;
+      const s = m.state || {}, q = s.queue || [], i = s.index || 0;
+      this.currentID = q[i] || null; this.playing = !!s.isPlaying; this.pos = s.position || 0; this.posAt = Date.now();
+      this.song = this.currentID ? (this.titles[this.currentID] || { id: this.currentID, title: "Loading…", artist: "", duration: 0 }) : null;
+      renderNow();
+    } else if (m.type === "tick") {
+      if (m.position != null) { this.pos = m.position; this.posAt = Date.now(); }
+      if (m.isPlaying != null) this.playing = m.isPlaying;
+    } else if (m.type === "library" && this.target) this.loadCatalog(this.target);
+    else if (m.type === "denied") { this.connected = false; renderNow(); }
+  },
+  async loadCatalog(t) {
+    try {
+      const r = await host.request("GET", `http://${bracket(t.host)}:${t.http}/catalog?t=${t.token}`, null);
+      if (r.status !== 200) return;
+      const c = JSON.parse(r.text); this.titles = {};
+      for (const x of c.tracks || []) this.titles[x.id] = { id: x.id, title: x.title, artist: x.artist, duration: x.duration || 0 };
+      if (this.currentID) this.song = this.titles[this.currentID] || this.song;
+      renderNow();
+    } catch (e) {}
+  },
+  art() { const t = this.target; return t && this.currentID ? `http://${bracket(t.host)}:${t.http}/art/${this.currentID}?t=${t.token}` : ""; },
+  cmd(action) {
+    if (!this.ws || this.ws.readyState !== 1) return;
+    this.seq++;
+    this.ws.send(JSON.stringify({ type: "command", command: { action }, seq: this.seq }));
+    if (action === "toggle") { this.pos = this.elapsed; this.posAt = Date.now(); this.playing = !this.playing; renderNow(); }
+  },
+};
+
+// ---------------------------------------------------------------- views
+
+const $ = (sel, el = document) => el.querySelector(sel);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const PAGES = [["tasks", "📚", "Tasks"], ["entries", "📝", "Entries"], ["sync", "🔄", "Sync"]];
+const companion = location.hash === "#companion";
+let page = "tasks", showDone = false, draftUrg = "green", pairing = null, pairErr = "", pairBusy = false;
+
+const ICON = {
+  text: '<svg viewBox="0 0 16 16"><path d="M1 13 5 3h1.5l4 10H8.8l-1-2.6H3.7L2.7 13zm3.2-4h3.1L5.75 4.9zM11 9.6c0-1.4 1.1-2 2.6-2h1.1v-.3c0-.7-.4-1.1-1.2-1.1-.6 0-1 .3-1.1.7h-1.3c.1-1.1 1.1-1.8 2.5-1.8 1.6 0 2.4.8 2.4 2.2V13h-1.3v-.7c-.3.5-.9.8-1.6.8-1.2 0-2.1-.7-2.1-1.8zm3.7-.3v-.7h-1c-.8 0-1.3.3-1.3.9 0 .5.4.8 1 .8.8 0 1.3-.4 1.3-1z"/></svg>',
+  cal: '<svg viewBox="0 0 16 16"><path d="M4 1h1.5v1.5h5V1H12v1.5h1.5A1.5 1.5 0 0 1 15 4v9.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 13.5V4a1.5 1.5 0 0 1 1.5-1.5H4zM2.5 6v7.5h11V6z"/></svg>',
+  sel: '<svg viewBox="0 0 16 16"><path d="M8 1a7 7 0 1 1 0 14A7 7 0 0 1 8 1zm0 1.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM5 6.5h6L8 10z"/></svg>',
+  prev: '<svg viewBox="0 0 16 16"><path d="M3 2h2v12H3zM14 2v12L6 8z"/></svg>',
+  next: '<svg viewBox="0 0 16 16"><path d="M11 2h2v12h-2zM2 2v12l8-6z"/></svg>',
+  play: '<svg viewBox="0 0 16 16"><path d="M4 2v12l10-6z"/></svg>',
+  pause: '<svg viewBox="0 0 16 16"><path d="M3 2h3.5v12H3zm6.5 0H13v12H9.5z"/></svg>',
+};
+
+function badgeHTML() {
+  const map = { synced: ["var(--g-dot)", "Synced " + (sync.at ? fmtTime(sync.at) : "")], syncing: ["var(--y-dot)", "Syncing…"],
+                offline: ["var(--r-dot)", sync.detail], notPaired: ["var(--tertiary)", "Not connected to Musiplex"] };
+  const [c, txt] = map[sync.status] || map.notPaired;
+  return `<span class="dot" style="background:${c}"></span>${esc(txt)}`;
+}
+function renderBadge() { document.querySelectorAll(".badge").forEach(b => b.innerHTML = badgeHTML()); }
+
+function header(icon, title, sub) {
+  return `<div class="icon">${icon}</div><h1>${esc(title)}</h1>${sub ? `<div class="sub">${esc(sub)}</div>` : ""}`;
+}
+
+function render() {
+  // Keep what's being typed (and the cursor) across redraws.
+  const active = document.activeElement, keep = {};
+  document.querySelectorAll("input[id]").forEach(i => { if (i.type !== "checkbox") keep[i.id] = i.value; });
+  const focusID = active && active.id ? active.id : null;
+  const focusRow = !focusID && active && active.closest ? active.closest("[data-id]")?.dataset.id : null;
+  const focusAct = active?.dataset?.act;
+  const sel = active && "selectionStart" in active ? [active.selectionStart, active.selectionEnd] : null;
+  renderInner();
+  for (const [id, v] of Object.entries(keep)) { const i = document.getElementById(id); if (i && !i.value) i.value = v; }
+  const again = focusID ? document.getElementById(focusID)
+    : focusRow && focusAct ? document.querySelector(`[data-id="${focusRow}"] [data-act="${focusAct}"]`) : null;
+  if (again) { again.focus(); if (sel) try { again.setSelectionRange(sel[0], sel[1]); } catch (_) {} }
+  if ($("#draft") && $("#preview")) $("#preview").innerHTML = previewHTML($("#draft").value);
+}
+function renderInner() {
+  document.body.classList.toggle("companion", companion);
+  $("#nav").innerHTML = `<div class="ws">Workload</div>` + PAGES.map(([id, ic, name]) =>
+    `<button class="${page === id ? "on" : ""}" data-page="${id}"><span class="ic">${ic}</span>${name}</button>`).join("");
+  const main = $("#main");
+  const scroll = main.scrollTop;
+  main.innerHTML = `<div class="pagebody">${companion ? companionHTML() : page === "tasks" ? tasksHTML() : page === "entries" ? entriesHTML() : syncHTML()}</div>`;
+  main.scrollTop = scroll;
+}
+
+function tasksHTML() {
+  const all = visibleTasks(), open = all.filter(t => !t.done);
+  const weekEnd = addDays(new Date(), 7);
+  const week = open.filter(t => (parseDue(t.due) || Infinity) < weekEnd).length;
+  const urgent = open.filter(t => t.urgency === "red").length;
+  const sub = [`${open.length} open`, `${week} due this week`].concat(urgent ? [`${urgent} urgent`] : []).join(" · ");
+  const rows = all.filter(t => showDone || !t.done).map(t => `
+    <div class="row ${t.done ? "done" : ""}" data-id="${t.id}">
+      <div class="c-check"><button class="check ${t.done ? "on" : ""}" data-act="done" aria-label="Done"></button></div>
+      <div class="c-name"><input data-act="title" value="${esc(t.title)}" placeholder="Untitled">${t.source === "toddle" ? '<span class="src">Toddle</span>' : ""}</div>
+      <div class="c-due"><button class="due-btn ${!t.due ? "none" : isOverdue(t) ? "late" : ""}" data-act="due">${esc(dueLabel(t))}</button></div>
+      <div class="c-urg"><button data-act="urg"><span class="tag ${t.urgency}">${URG[t.urgency]}</span></button></div>
+    </div>`).join("");
+  const doneCount = all.filter(t => t.done).length;
+  return header("📚", "Tasks", sub) + `<div class="badge">${badgeHTML()}</div>` +
+    (host.inlineNowPlaying ? `<div id="np">${nowHTML()}</div>` : "") +
+    `<div class="row head"><div class="c-check"></div><div class="c-name">${ICON.text}Task name</div><div class="c-due">${ICON.cal}${innerWidth < 700 ? "Due" : "Due date"}</div><div class="c-urg">${ICON.sel}Urgency</div></div>
+    ${rows}
+    <div class="row newrow"><div class="c-check">＋</div><input id="newtask" placeholder="New  (e.g. Essay draft - Friday)" style="flex:1"></div>
+    ${doneCount ? `<button class="more" data-act="showdone">${showDone ? "Hide" : "Show"} ${doneCount} done</button>` : ""}`;
+}
+
+function entryLine(t) {
+  const d = parseDue(t.due);
+  if (!d) return t.title;
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  let s = `${d.toLocaleDateString("en-US", { month: "short" })} ${d.getDate()}${sameYear ? "" : " " + d.getFullYear()}`;
+  if (t.due.includes("T")) s += " " + fmtTime(d);
+  return `${t.title} - ${s}`;
+}
+function entriesHTML() {
+  const lines = entries().map(t => `
+    <div class="entry ${t.done ? "done" : ""}" data-id="${t.id}">
+      <button class="dotbtn" data-act="urg"><span class="udot ${t.urgency}"></span></button>
+      <input data-act="line" value="${esc(entryLine(t))}">
+      <span class="tag ${t.urgency}">${URG[t.urgency]}</span>
+    </div>`).join("");
+  return header("📝", "Entries", "Type an assignment, then a comma or dash and when it's due. Return adds it.") + `<div style="height:14px"></div>` + lines + `
+    <div class="entry">
+      <button class="dotbtn" data-act="drafturg"><span class="udot ${draftUrg}"></span></button>
+      <input id="draft" data-keep="1" placeholder="Essay draft - Friday 11pm" style="font-size:17px">
+    </div><div id="preview"></div>`;
+}
+function previewHTML(text) {
+  if (!text.trim()) return "";
+  const p = parseEntry(text);
+  const due = p.due ? "due " + dueLabel({ due: p.due }) : "no due date";
+  return `<div class="preview">↳ <b>${esc(p.title || "Untitled")}</b> · ${esc(due)} ${p.urgency ? `<span class="tag ${p.urgency}">${URG[p.urgency]}</span>` : ""}</div>`;
+}
+
+function syncHTML() {
+  const paired = !!P().token;
+  const servers = sync.found.map((s, i) => `<button class="server" data-act="pick" data-i="${i}">🖥️ ${esc(s.name)}<small>${esc(s.ip)}</small>${s.name === P().serverName ? " ✓" : ""}</button>`).join("")
+    || `<div class="sub">Looking… Make sure Musiplex is running on the laptop.</div>`;
+  return header("🔄", "Sync", "Tasks live on your Musiplex server and sync to every device when you're on the same Wi‑Fi (or on Tailscale).") +
+    `<div class="badge">${badgeHTML()}</div>` +
+    (paired ? `<div class="section"><h3>Connected</h3>
+      <div class="kv"><span>Server</span><span>${esc(P().serverName)}</span></div>
+      <div class="kv"><span>Home address</span><span>${esc(P().serverHost)}</span></div>
+      <div class="kv"><span>Away from home</span><input id="away" data-keep="1" placeholder="Tailscale 100.x.y.z" value="${esc(P().awayHost || "")}"></div>
+      <div style="display:flex;gap:8px;margin-top:6px"><button class="btn" data-act="syncnow">Sync now</button><button class="btn danger" data-act="unpair">Disconnect</button></div></div>` : "") +
+    `<div class="section"><h3>Musiplex servers on this Wi‑Fi</h3>${servers}
+      <div style="display:flex;gap:8px;margin-top:8px"><input id="manual" class="field" data-keep="1" placeholder="Or type an address" style="flex:1"><button class="btn" data-act="manual">Connect</button></div></div>` +
+    (pairing ? `<div class="section"><h3>Pair with ${esc(pairing.name)}</h3>
+      <div class="sub">Type the 6‑digit PIN shown in the Musiplex window on that computer.</div>
+      <div style="display:flex;gap:8px;margin-top:8px"><input id="pin" class="field" data-keep="1" inputmode="numeric" maxlength="6" placeholder="PIN" style="width:120px">
+      <button class="btn primary" data-act="pair">${pairBusy ? "Pairing…" : "Pair"}</button></div>
+      ${pairErr ? `<div class="err">${esc(pairErr)}</div>` : ""}</div>` : "");
+}
+
+function nowHTML() {
+  const n = nowPlaying, s = n.song;
+  const art = s ? n.art() : "";
+  const info = s
+    ? `<div class="t">${esc(s.title)}</div><div class="a">${esc(s.artist)}</div>${s.duration ? `<div class="bar"><div id="npbar" style="width:${Math.min(100, n.elapsed / s.duration * 100)}%"></div></div>` : ""}`
+    : `<div class="t" style="font-weight:400;color:var(--secondary)">${n.connected ? "Nothing playing" : "Musiplex isn't reachable"}</div><div class="a" style="color:var(--tertiary)">${esc(n.connected ? n.where : "Open Musiplex, or pair in Sync")}</div>`;
+  return `<div class="np"><div class="art" style="${art ? `background-image:url('${art}')` : ""}">${art ? "" : "♪"}</div><div class="info">${info}</div>
+    <div class="ctl"><button data-act="prev">${ICON.prev}</button><button data-act="toggle">${n.playing ? ICON.pause : ICON.play}</button><button data-act="next">${ICON.next}</button></div></div>`;
+}
+function renderNow() { const el = $("#np"); if (el) el.innerHTML = nowHTML(); }
+
+function companionHTML() {
+  const up = visibleTasks().filter(t => !t.done).slice(0, 7).map(t => `
+    <div class="up" data-id="${t.id}"><button class="check" data-act="done" title="Mark done"></button>
+      <div class="info"><div class="t">${esc(t.title)}</div><div class="d ${isOverdue(t) ? "late" : ""}">${esc(dueLabel(t))}</div></div>
+      <button data-act="urg"><span class="tag ${t.urgency}">${URG[t.urgency]}</span></button></div>`).join("")
+    || `<div class="sub" style="padding:6px 0">Nothing due. Nice.</div>`;
+  return `<div class="chead"><b>Workload</b><div class="badge">${badgeHTML()}</div></div>
+    <div id="np">${nowHTML()}</div>
+    <div class="cap">UP NEXT</div>${up}
+    <div class="quick">＋<input id="quick" data-keep="1" placeholder="Add: Essay - Friday"></div>
+    <div class="foot"><button data-act="openmain">Open Workload</button><button data-act="quit">Quit</button></div>`;
+}
+
+// ---------------------------------------------------------------- popovers
+
+function closePop() { $("#layer").innerHTML = ""; }
+function openPop(anchor, html, onClick) {
+  const r = anchor.getBoundingClientRect();
+  const layer = $("#layer");
+  layer.innerHTML = `<div style="position:fixed;inset:0;z-index:9" data-close="1"></div><div class="pop">${html}</div>`;
+  const pop = $(".pop", layer);
+  const w = pop.offsetWidth, h = pop.offsetHeight;
+  pop.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + "px";
+  pop.style.top = (r.bottom + 4 + h > innerHeight ? Math.max(8, r.top - h - 4) : r.bottom + 4) + "px";
+  layer.onclick = e => {
+    if (e.target.dataset.close) return closePop();
+    const b = e.target.closest("[data-v]");
+    if (b) onClick(b.dataset.v, pop);
+  };
+  return pop;
+}
+function urgencyMenu(anchor, current, pick) {
+  openPop(anchor, ["green", "yellow", "red"].map(u =>
+    `<button class="item" data-v="${u}"><span class="udot ${u}"></span><span class="tag ${u}">${URG[u]}</span>${u === current ? " ✓" : ""}</button>`).join(""),
+    v => { closePop(); pick(v); });
+}
+function dueEditor(anchor, t) {
+  const d = parseDue(t.due) || (() => { const x = new Date(); x.setHours(23, 59, 0, 0); return x; })();
+  const timed = !!(t.due && t.due.includes("T"));
+  const pop = openPop(anchor, `
+    <input id="dueinput" type="${timed ? "datetime-local" : "date"}" value="${timed ? dueStr(d, true) : dayStr(d)}">
+    <label><input id="duetime" type="checkbox" ${timed ? "checked" : ""}> Include time</label>
+    <div class="btns"><button class="btn danger" data-v="clear">Clear</button><button class="btn primary" data-v="save">Done</button></div>`,
+    v => {
+      const val = $("#dueinput").value;
+      update(t.id, x => { x.due = v === "clear" || !val ? null : val.slice(0, $("#duetime").checked ? 16 : 10); });
+      closePop();
+    });
+  $("#duetime", pop).onchange = e => {
+    const inp = $("#dueinput", pop), v = inp.value;
+    inp.type = e.target.checked ? "datetime-local" : "date";
+    inp.value = e.target.checked ? (v.length === 10 ? v + "T23:59" : v) : v.slice(0, 10);
+  };
+}
+
+// ---------------------------------------------------------------- events
+
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-page],[data-act]");
+  if (!b) return;
+  if (b.dataset.page) { page = b.dataset.page; pairing = null; render(); if (page === "sync") refreshServers(); return; }
+  const id = b.closest("[data-id]")?.dataset.id;
+  switch (b.dataset.act) {
+    case "done": update(id, t => t.done = !t.done); break;
+    case "urg": urgencyMenu(b, find(id).urgency, u => update(id, t => t.urgency = u)); break;
+    case "due": dueEditor(b, find(id)); break;
+    case "showdone": showDone = !showDone; render(); break;
+    case "drafturg": urgencyMenu(b, draftUrg, u => { draftUrg = u; $(".dotbtn[data-act=drafturg]").innerHTML = `<span class="udot ${u}"></span>`; }); break;
+    case "pick": pairing = sync.found[+b.dataset.i]; pairErr = ""; render(); setTimeout(() => $("#pin")?.focus(), 0); break;
+    case "manual": { const h = $("#manual").value.trim(); if (h) { pairing = { name: h, ip: h, http: 7860 }; pairErr = ""; render(); } break; }
+    case "pair": doPair(); break;
+    case "syncnow": syncNow(); break;
+    case "unpair": unpair(); break;
+    case "prev": nowPlaying.cmd("prev"); break;
+    case "next": nowPlaying.cmd("next"); break;
+    case "toggle": nowPlaying.cmd("toggle"); break;
+    case "openmain": host.openMain && host.openMain(); break;
+    case "quit": host.quit && host.quit(); break;
+  }
+});
+async function doPair() {
+  const pin = ($("#pin")?.value || "").replace(/\D/g, "");
+  document.activeElement?.blur();
+  if ($("#pin")) $("#pin").value = "";
+  if (pin.length !== 6 || !pairing) { pairErr = "The PIN has 6 digits."; render(); return; }
+  pairBusy = true; pairErr = ""; render();
+  try { await pair(pairing, pin); pairing = null; } catch (err) { pairErr = err.message; }
+  pairBusy = false; render();
+}
+document.addEventListener("keydown", e => {
+  const el = e.target;
+  if (e.key === "Escape") closePop();
+  if (e.key !== "Enter" || el.tagName !== "INPUT") return;
+  if (el.id === "newtask" || el.id === "quick") { const v = el.value; el.value = ""; if (!addTask(v)) el.value = v; }
+  else if (el.id === "draft") {
+    const v = el.value; el.value = "";
+    if (addTask(v, draftUrg)) { draftUrg = "green"; render(); } else el.value = v;
+  }
+  else if (el.id === "pin") doPair();
+  else if (el.id === "away") { P().awayHost = el.value.trim(); save(); el.blur(); }
+  else if (el.id === "manual") $("[data-act=manual]").click();
+  else el.blur();
+});
+document.addEventListener("input", e => { if (e.target.id === "draft") $("#preview").innerHTML = previewHTML(e.target.value); });
+document.addEventListener("focusout", e => {
+  const el = e.target, id = el.closest?.("[data-id]")?.dataset.id;
+  if (el.dataset?.act === "title") {
+    const v = el.value.trim(), t = find(id);
+    if (!v) el.value = t.title; else if (v !== t.title) update(id, x => x.title = v);
+  } else if (el.dataset?.act === "line") {
+    const t = find(id);
+    if (t && el.value !== entryLine(t)) setText(id, el.value);
+  } else if (el.id === "away") { P().awayHost = el.value.trim(); save(); }
+});
+setInterval(() => {
+  const bar = $("#npbar"), s = nowPlaying.song;
+  if (bar && s && s.duration) bar.style.width = Math.min(100, nowPlaying.elapsed / s.duration * 100) + "%";
+}, 1000);
+
+// ---------------------------------------------------------------- hosts
+
+function makeHost() {
+  // Android: synchronous bridge for storage/discovery, callbacks for requests.
+  if (window.Android) {
+    const pending = {}; let n = 0;
+    window.__hostReply = (id, status, text) => { const p = pending[id]; delete pending[id]; if (!p) return; status < 0 ? p.reject(new Error(text)) : p.resolve({ status, text }); };
+    return {
+      platform: "android", inlineNowPlaying: true,
+      request: (method, url, body) => new Promise((resolve, reject) => { const id = ++n; pending[id] = { resolve, reject }; Android.request(id, method, url, body || ""); }),
+      load: async () => Android.load() || null,
+      save: s => Android.save(s),
+      discover: async () => JSON.parse(Android.servers() || "[]"),
+    };
+  }
+  // Windows: pywebview's API (every call returns a promise).
+  if (window.pywebview) {
+    const api = window.pywebview.api;
+    return {
+      platform: "windows", inlineNowPlaying: false,
+      request: async (method, url, body) => { const r = await api.request(method, url, body); if (r.status < 0) throw new Error(r.text); return r; },
+      load: () => api.load(),
+      save: s => api.save(s),
+      discover: () => api.discover(),
+      musiplexLocal: () => api.musiplex_local(),
+      openMain: () => api.open_main(),
+      quit: () => api.quit(),
+    };
+  }
+  // Plain browser (testing): same-origin fetch, localStorage.
+  return {
+    platform: "web", inlineNowPlaying: true,
+    request: async (method, url, body) => {
+      const u = new URL(url); const same = u.host === location.host;
+      const r = await fetch(same ? u.pathname + u.search : url, { method, body: body || undefined, headers: body ? { "Content-Type": "application/json" } : {} });
+      return { status: r.status, text: await r.text() };
+    },
+    load: async () => { try { return localStorage.getItem("workload"); } catch (e) { return null; } },
+    save: s => { try { localStorage.setItem("workload", s); } catch (e) {} },
+    discover: async () => location.protocol.startsWith("http") ? [{ name: "This server", ip: location.hostname, http: +location.port || 80, ws: (+location.port || 80) + 1 }] : [],
+  };
+}
+
+let host;
+async function boot() {
+  host = makeHost();
+  try { const saved = JSON.parse(await host.load() || "null"); if (saved) { state.tasks = saved.tasks || []; state.prefs = saved.prefs || {}; } } catch (e) {}
+  if (P().token) { sync.status = "offline"; sync.detail = "Not synced yet"; }
+  render();
+  syncNow(); refreshServers(); nowPlaying.start();
+  autoPairLocal();
+  setInterval(syncNow, 60000);
+  setInterval(refreshServers, 15000);
+  setInterval(() => { if (page === "tasks" && !companion) renderBadge(); }, 30000);
+  // Shells call these: the app came back to the front, or the network changed (e.g. home Wi‑Fi).
+  window.workloadResume = () => { syncNow(); if (!nowPlaying.ws) nowPlaying.start(); };
+  window.workloadNetwork = () => setTimeout(() => { syncNow(); refreshServers(); nowPlaying.restart(); }, 2000);
+  window.workloadReload = async () => { try { const s = JSON.parse(await host.load() || "null"); if (s) { merge(s.tasks); } } catch (e) {} };
+  addEventListener("online", window.workloadNetwork);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) window.workloadResume(); });
+}
+// The Windows shell opens the page with ?shell=pywebview and its API arrives a moment later.
+let booted = false;
+const bootOnce = () => { if (!booted) { booted = true; boot(); } };
+if (location.hash !== "#test") {
+  if (new URLSearchParams(location.search).get("shell") === "pywebview") {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.load) bootOnce();
+    else window.addEventListener("pywebviewready", bootOnce);
+  } else bootOnce();
+}
+
+// Tests: open workload.html#test in a browser to run the parser checks.
+if (location.hash === "#test") {
+  const now = new Date(2026, 10, 22, 18, 0);   // Sunday Nov 22 2026
+  const cases = [
+    ["Essay draft - Friday", "Essay draft", "2026-11-27", null], ["Math worksheet, Dec 3 5pm", "Math worksheet", "2026-12-03T17:00", null],
+    ["Lab report 12/4", "Lab report", "2026-12-04", null], ["Bio quiz tomorrow urgent", "Bio quiz", "2026-11-23", "red"],
+    ["Read chapter 3 notes", "Read chapter 3 notes", null, null], ["History project – Nov 30 11:59 PM", "History project", "2026-11-30T23:59", null],
+    ["Chem test on Monday", "Chem test", "2026-11-23", null], ["Spanish vocab, next tuesday not urgent", "Spanish vocab", "2026-12-01", "green"],
+    ["Essay draft - Nov 28 2027", "Essay draft", "2027-11-28", null], ["Physics HW - Nov 3", "Physics HW", "2027-11-03", null],
+    ["Chapter 3, 5 questions", "Chapter 3, 5 questions", null, null], ["Poster - 2026-12-10", "Poster", "2026-12-10", null],
+    ["Reading log in 3 days", "Reading log", "2026-11-25", null], ["Quiz, today 3:30pm", "Quiz", "2026-11-22T15:30", null],
+  ];
+  const out = cases.map(([inp, title, due, urg]) => {
+    const r = parseEntry(inp, now);
+    const ok = r.title === title && r.due === due && r.urgency === urg;
+    return `${ok ? "PASS" : "FAIL"}  ${inp}  =>  ${r.title} | ${r.due} | ${r.urgency}`;
+  });
+  document.body.innerHTML = `<pre id="results" style="padding:20px">${out.join("\n")}</pre>`;
+}
+</script>
+</body>
+</html>

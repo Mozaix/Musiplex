@@ -19,11 +19,13 @@ Everything is on the [latest release](https://github.com/Mozaix/Musiplex/release
 
 | Download | For | How |
 | --- | --- | --- |
-| `Musiplex-…-mac.zip` | Mac server | Unzip, drag to Applications. It isn't notarized, so the first time right-click it → **Open** (or run `xattr -dr com.apple.quarantine /Applications/Musiplex.app`). |
-| `Musiplex-…-Windows.exe` | Windows server | Run it. It starts at login from then on and adds **Musiplex** to the Start menu (right-click → Pin to taskbar). If Windows SmartScreen warns, click **More info → Run anyway**, and allow it on **private networks** when the firewall asks. |
+| `Musiplex-…-Mac.pkg` | Mac installer | Tick **Musiplex**, **Workload** or both; they go to Applications. It isn't signed by Apple, so the first time right-click it → **Open**. |
+| `Musiplex-…-Windows-Setup.exe` | Windows installer | Tick **Musiplex**, **Workload** or both, and whether Musiplex starts with Windows. Installs for your user, no admin. If SmartScreen warns, click **More info → Run anyway**, and allow Musiplex on **private networks** when the firewall asks. Uninstall from Settings → Apps. |
 | `Musiplex-…-Linux.tar.gz` | Linux server | Unpack and run `./install.sh` in the `Linux` folder. See [Linux/README.md](Linux/README.md). |
 | `Musiplex-…-Android.apk` | Android phones | Open it on the phone and allow installing from your browser or Files app. Android 8 or newer. |
 | `Musiplex-…-iOS-unsigned.ipa` | iPhone / iPad / Watch | Unsigned: sideload with AltStore or Sideloadly, or build it from Xcode (below). |
+| `Workload-…-Android.apk` | Workload on Android | School tasks; syncs through your Musiplex server. |
+| `Workload-…-iOS-unsigned.ipa` | Workload on iPhone / iPad | Unsigned: sideload like Musiplex. |
 
 **Pairing:** a phone asks for the server's 6‑digit PIN once. It's in Musiplex's Settings on the Mac, and in the Musiplex window on Windows and Linux.
 
@@ -243,5 +245,7 @@ You can't merge Bluetooth and Wi‑Fi into one faster connection: Bluetooth adds
 | `Linux/` | The Linux and Windows server (`musiplex_server.py`) and the Linux installer |
 | `Windows/` | The Windows launcher, built into `Musiplex.exe` by GitHub Actions |
 | `Android/` | The Android app (built into the APK by GitHub Actions) |
+| `Workload/` | Workload (school tasks) for Windows and Android: the page, the Windows app and the Android app |
+| `Installer/` | The Windows installer (Inno Setup) and the Mac .pkg builder, with a checkbox per app |
 
 The server uses port 7860 for HTTP (catalog, artwork and audio, with Range support) and port 7861 for WebSocket control, and advertises itself over Bonjour as `_musiplex._tcp`.
