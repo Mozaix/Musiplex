@@ -319,25 +319,70 @@ class SelftestApi:
 
 
 def selftest() -> int:
-    """For the release build: open the page hidden, check it started, exit 0 (or 1)."""
+    """For the release build: open the page in a small window (briefly), check that it
+    started, exit 0 (or 1). Every step goes to %APPDATA%\\Workload\\selftest.log."""
+    import time
+    import traceback
     import webview
-    result = {"ok": False}
-    win = webview.create_window(APP, page_path().as_uri() + "?shell=pywebview", hidden=True, js_api=SelftestApi())
+
+    DATA.mkdir(parents=True, exist_ok=True)
+    log_file = open(DATA / "selftest.log", "w", encoding="utf-8")
+
+    def log(*parts):
+        line = f"{time.strftime('%H:%M:%S')} " + " ".join(str(p) for p in parts)
+        print(line, flush=True)
+        log_file.write(line + "\n")
+        log_file.flush()
+
+    def finish(ok: bool):
+        log("selftest", "passed" if ok else "FAILED")
+        log_file.close()
+        os._exit(0 if ok else 1)          # the window loop doesn't always end on its own
+
+    try:
+        page = page_path()
+        log("bundle:", BUNDLE, "| page:", page, "| exists:", page.exists(), "| size:", page.stat().st_size)
+        url = page.as_uri() + "?shell=pywebview"
+        log("url:", url, "| pywebview", getattr(webview, "__version__", "?"))
+        loaded = {"at": None}
+        # Not hidden: some backends don't load a page into a window that's never shown.
+        win = webview.create_window(f"{APP} selftest", url, width=420, height=520,
+                                    js_api=SelftestApi(), focus=False)
+        win.events.loaded += lambda *a: loaded.update(at=time.time())
+    except Exception:
+        log("setup failed:", traceback.format_exc())
+        finish(False)
+
+    probe = ("JSON.stringify({ready: document.readyState, href: location.href, parser: typeof parseEntry, "
+             "ok: typeof parseEntry === 'function' && parseEntry('Essay - Dec 3').title === 'Essay', "
+             "errors: window.__errors || []})")
 
     def check():
-        import time
-        for _ in range(60):
+        log("window loop started; gui:", getattr(webview, "guilib", None) and getattr(webview.guilib, "__name__", "?"))
+        last = None
+        for i in range(60):
             time.sleep(0.5)
             try:
-                if win.evaluate_js("typeof parseEntry === 'function' && parseEntry('Essay - Dec 3').title === 'Essay'"):
-                    result["ok"] = True
-                    break
-            except Exception:
-                pass
-        print("selftest", "passed" if result["ok"] else "FAILED", flush=True)
-        os._exit(0 if result["ok"] else 1)   # the window loop doesn't always end on its own
+                raw = win.evaluate_js(probe)
+                state = json.loads(raw) if isinstance(raw, str) else raw
+            except Exception as e:
+                state = {"exception": repr(e)}
+            if state != last:
+                log(f"t+{(i + 1) / 2:.1f}s loaded={loaded['at'] is not None}", state)
+                last = state
+            if isinstance(state, dict) and state.get("ok"):
+                return finish(True)
+        try:
+            log("current url:", win.get_current_url())
+        except Exception as e:
+            log("get_current_url failed:", repr(e))
+        finish(False)
 
-    webview.start(check, private_mode=True)
+    try:
+        webview.start(check, private_mode=True)
+    except Exception:
+        log("webview.start failed:", traceback.format_exc())
+        finish(False)
     return 1
 
 

@@ -166,6 +166,12 @@ body.companion .pagebody { padding: 14px; }
 </div>
 <div id="layer"></div>
 <script>
+// Page errors, for the Windows build's --selftest log.
+window.__errors = [];
+addEventListener("error", e => window.__errors.push(`${e.message} (${e.lineno}:${e.colno})`));
+addEventListener("unhandledrejection", e => window.__errors.push("promise: " + (e.reason && e.reason.message || e.reason)));
+</script>
+<script>
 "use strict";
 
 // ---------------------------------------------------------------- dates

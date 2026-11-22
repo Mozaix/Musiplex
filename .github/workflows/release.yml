@@ -55,6 +55,7 @@ jobs:
         run: |
           $p = Start-Process dist/Workload.exe -ArgumentList "--selftest" -Wait -PassThru
           Write-Host "Workload selftest exit code: $($p.ExitCode)"
+          Get-Content "$env:APPDATA/Workload/selftest.log" -ErrorAction SilentlyContinue
           if ($p.ExitCode -ne 0) { throw "Workload selftest failed" }
       - name: Check that the server starts
         shell: pwsh
