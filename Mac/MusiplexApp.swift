@@ -48,6 +48,8 @@ final class AppModel {
     let linked = LinkedServer()
     let spotify = SpotifyLink()
     let discover = Discover()
+    /// The Mac's sound outputs (speakers, AirPods, Bluetooth speakers, AirPlay).
+    let outputs = AudioOutputs()
     @ObservationIgnored private(set) var recorder: ListeningRecorder!
     @ObservationIgnored private var guessHour = -1
     @ObservationIgnored private var guessTimer: Timer?
