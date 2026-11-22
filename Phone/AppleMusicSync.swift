@@ -9,8 +9,9 @@ import Observation
 ///   Musiplex playlist (with the songs your Mac has). Songs you add or remove
 ///   in Apple Music are added/removed in Musiplex.
 /// - Musiplex → Apple Music: each Musiplex playlist gets an Apple Music
-///   playlist, and songs you add in Musiplex are added there too (when that
-///   song is in Apple Music on this iPhone).
+///   playlist, and its songs are added there too: from Apple Music on this
+///   iPhone, or else found in the Apple Music catalog (needs a subscription).
+///   Songs that couldn't be added yet are retried on later syncs.
 ///
 /// Changes are worked out by comparing with the last sync, so edits never
 /// bounce back and forth. Apple doesn't let apps remove songs from Apple
@@ -36,12 +37,15 @@ final class AppleMusicSync {
         var name: String
         var lastAM: [String]
         var lastMP: [String]
+        /// Songs you removed from the Apple Music playlist yourself: never put back.
+        var removed: [String]? = nil
     }
 
     @ObservationIgnored private var links: [Link] = []
     /// What the last sync saw; if nothing changed since, the next one is skipped.
     @ObservationIgnored private var lastFingerprint: Int?
     @ObservationIgnored private var running = false
+    @ObservationIgnored private var catalogTried: [String: Date] = [:]
     @ObservationIgnored private var again = false
     @ObservationIgnored private var debounce: Task<Void, Never>?
     @ObservationIgnored private let fileURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -130,6 +134,15 @@ final class AppleMusicSync {
         let from = "Apple Music on \(input.device)"
         var next: [Link] = []
 
+        // Looser match for the same song tagged a bit differently on each side:
+        // "Song (feat. X)" vs "Song", "A, B" vs "A & B".
+        var libraryByLoose: [String: MPMediaItem] = [:]
+        for item in MPMediaQuery.songs().items ?? [] {
+            let k = Self.looseKey(item.title ?? "", item.artist ?? "")
+            if libraryByLoose[k] == nil { libraryByLoose[k] = item }
+        }
+        func loose(_ t: Track) -> MPMediaItem? { libraryByLoose[Self.looseKey(t.title, t.artist)] }
+
         // 1. Apple Music → Musiplex.
         for list in amLists {
             var seen = Set<String>()
@@ -138,6 +151,10 @@ final class AppleMusicSync {
             if var link = links.first(where: { $0.am == list.persistentID }) {
                 if mineByID[link.mp] != nil {
                     let before = Set(link.lastAM), now = Set(keysNow)
+                    var removed = Set(link.removed ?? [])
+                    removed.formUnion(link.lastAM.filter { !now.contains($0) })
+                    removed.subtract(keysNow)
+                    link.removed = Array(removed)
                     let add = keysNow.filter { !before.contains($0) }.compactMap { byKey[$0] }
                     let remove = link.lastAM.filter { !now.contains($0) }.compactMap { byKey[$0] }
                     let renamed = name != link.name ? name : nil
@@ -174,18 +191,27 @@ final class AppleMusicSync {
         var missing = 0
         for list in mine {
             if let i = next.firstIndex(where: { $0.mp == list.id }) {
+                // Every song in the Musiplex playlist that the Apple Music one lacks, not just
+                // ones added since last time: songs that weren't on this iPhone yet are retried.
+                // Songs you removed in Apple Music stay out, unless you add them again in Musiplex.
                 let before = Set(next[i].lastMP)
-                let added = list.trackIDs.filter { !before.contains($0) }
-                if !added.isEmpty, let am = amLists.first(where: { $0.persistentID == next[i].am }) {
+                var removed = Set(next[i].removed ?? [])
+                for id in list.trackIDs where !before.contains(id) {
+                    if let t = trackByID[id] { removed.remove(songKey(title: t.title, artist: t.artist)) }
+                }
+                next[i].removed = Array(removed)
+                if let am = amLists.first(where: { $0.persistentID == next[i].am }) {
                     let there = Set(am.items.map(key))
                     var items: [MPMediaItem] = []
-                    for id in added {
+                    var catalog: [Track] = []
+                    for id in list.trackIDs {
                         guard let t = trackByID[id] else { continue }
                         let k = songKey(title: t.title, artist: t.artist)
-                        if there.contains(k) { continue }
-                        if let item = libraryByKey[k] { items.append(item) } else { missing += 1 }
+                        if there.contains(k) || removed.contains(k) { continue }
+                        if let item = libraryByKey[k] ?? loose(t) { items.append(item) } else { catalog.append(t) }
                     }
                     if !items.isEmpty { try? await am.add(items) }
+                    missing += await addFromCatalog(catalog, to: am)
                 }
                 next[i].lastMP = list.trackIDs
             } else if let old = links.first(where: { $0.mp == list.id }) {
@@ -199,13 +225,15 @@ final class AppleMusicSync {
                 guard let am = try? await MPMediaLibrary.default().getPlaylist(with: uuid, creationMetadata: meta) else { continue }
                 let there = Set(am.items.map(key))
                 var items: [MPMediaItem] = []
+                var catalog: [Track] = []
                 for id in list.trackIDs {
                     guard let t = trackByID[id] else { continue }
                     let k = songKey(title: t.title, artist: t.artist)
                     if there.contains(k) { continue }
-                    if let item = libraryByKey[k] { items.append(item) } else { missing += 1 }
+                    if let item = libraryByKey[k] ?? loose(t) { items.append(item) } else { catalog.append(t) }
                 }
                 if !items.isEmpty { try? await am.add(items) }
+                missing += await addFromCatalog(catalog, to: am)
                 next.append(Link(am: am.persistentID, mp: list.id, name: list.name,
                                  lastAM: am.items.map(key), lastMP: list.trackIDs))
             }
@@ -217,6 +245,44 @@ final class AppleMusicSync {
         notInAppleMusic = missing
         lastSync = Date()
         if let data = try? JSONEncoder().encode(next) { try? data.write(to: fileURL, options: .atomic) }
+    }
+
+    static func looseKey(_ title: String, _ artist: String) -> String {
+        let cut = title.range(of: #"\s*(\(|\[| - | feat\.? | ft\.? ).*$"#, options: [.regularExpression, .caseInsensitive])
+        let base = cut.map { String(title[..<$0.lowerBound]) } ?? title
+        let lead = artist.lowercased().range(of: #",| & | x | feat\.? | ft\.? | and "#, options: .regularExpression)
+        let main = lead.map { String(artist.lowercased()[..<$0.lowerBound]) } ?? artist
+        return songKey(title: base, artist: main)
+    }
+
+    /// Songs not in Apple Music on this iPhone: find them in the Apple Music catalog
+    /// (Apple's free search) and add them by their store ID. Needs an Apple Music
+    /// subscription. Returns how many still couldn't be added.
+    private func addFromCatalog(_ tracks: [Track], to playlist: MPMediaPlaylist) async -> Int {
+        guard !tracks.isEmpty else { return 0 }
+        var failed = 0
+        let country = Locale.current.region?.identifier ?? "US"
+        let now = Date()
+        for t in tracks.prefix(25) {
+            // Couldn't add it lately: don't ask Apple again for a few hours.
+            let tk = Self.looseKey(t.title, t.artist)
+            if let when = catalogTried[tk], now.timeIntervalSince(when) < 6 * 3600 { failed += 1; continue }
+            var comps = URLComponents(string: "https://itunes.apple.com/search")!
+            comps.queryItems = [.init(name: "term", value: "\(t.title) \(t.artist)"), .init(name: "entity", value: "song"),
+                                .init(name: "limit", value: "10"), .init(name: "country", value: country)]
+            let want = Self.looseKey(t.title, t.artist)
+            var id: Int?
+            if let (data, _) = try? await URLSession.shared.data(from: comps.url!),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                id = (json["results"] as? [[String: Any]] ?? []).first {
+                    Self.looseKey($0["trackName"] as? String ?? "", $0["artistName"] as? String ?? "") == want
+                }?["trackId"] as? Int
+            }
+            if let id, (try? await playlist.addItem(withProductID: String(id))) != nil { continue }
+            catalogTried[tk] = now
+            failed += 1
+        }
+        return failed + max(0, tracks.count - 25)
     }
 
     /// Your own playlists: not smart/Genius ones, folders, or Apple Music's curated playlists.
