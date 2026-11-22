@@ -44,6 +44,36 @@ def page_path() -> Path:
     raise SystemExit("workload.html is missing")
 
 
+def serve_page() -> str:
+    """Serves workload.html from 127.0.0.1 on a free port and returns its address.
+
+    The page can't be opened as a file:// URL: on Windows pywebview percent-encodes the
+    `?` of a file URL, so WebView2 looks for a file named "workload.html?shell=…"."""
+    import http.server
+
+    body = page_path().read_bytes()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.split("?")[0] not in ("/", "/index.html"):
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_address[1]}/"
+
+
 def icon_path() -> Path | None:
     for p in (BUNDLE / "workload.png", BUNDLE.parent / "Art" / "icon-1024.png"):
         if p.exists():
@@ -145,7 +175,7 @@ class App:
         import webview
         self.webview = webview
         self.finder = Finder()
-        url = page_path().as_uri() + "?shell=pywebview"
+        url = serve_page() + "?shell=pywebview"
         self.main_api, self.comp_api = Api(self), Api(self)
         self.main = webview.create_window(APP, url, width=1080, height=720, min_size=(380, 480),
                                           hidden=background, js_api=self.main_api, background_color="#FFFFFF")
@@ -342,7 +372,7 @@ def selftest() -> int:
     try:
         page = page_path()
         log("bundle:", BUNDLE, "| page:", page, "| exists:", page.exists(), "| size:", page.stat().st_size)
-        url = page.as_uri() + "?shell=pywebview"
+        url = serve_page() + "?shell=pywebview"
         log("url:", url, "| pywebview", getattr(webview, "__version__", "?"))
         loaded = {"at": None}
         # Not hidden: some backends don't load a page into a window that's never shown.
@@ -354,7 +384,9 @@ def selftest() -> int:
         finish(False)
 
     probe = ("JSON.stringify({ready: document.readyState, href: location.href, parser: typeof parseEntry, "
-             "ok: typeof parseEntry === 'function' && parseEntry('Essay - Dec 3').title === 'Essay', "
+             "shell: typeof host !== 'undefined' && host ? host.platform : null, "
+             "ok: typeof parseEntry === 'function' && parseEntry('Essay - Dec 3').title === 'Essay' "
+             "&& typeof host !== 'undefined' && !!host && host.platform === 'windows', "
              "errors: window.__errors || []})")
 
     def check():
