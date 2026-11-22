@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sets up the hourly Toddle → Musiplex sync on this Linux computer (CachyOS etc.).
+# Sets up the every-15-minutes Toddle → Musiplex sync on this Linux computer (CachyOS etc.).
 # Usage: ./install.sh            (asks for your Toddle iCal link)
 #        ./install.sh <ical-url>
 set -euo pipefail
@@ -48,11 +48,11 @@ UNIT
 
 cat > "$units/workload-toddle.timer" <<UNIT
 [Unit]
-Description=Workload: check Toddle every hour
+Description=Workload: check Toddle every 15 minutes
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=1h
+OnUnitActiveSec=15min
 Persistent=true
 
 [Install]
@@ -64,7 +64,7 @@ systemctl --user enable --now workload-toddle.timer
 systemctl --user start workload-toddle.service || true
 
 echo
-echo "Done. Toddle is checked every hour."
+echo "Done. Toddle is checked every 15 minutes."
 echo "  Run it now:   systemctl --user start workload-toddle.service"
 echo "  See the log:  journalctl --user -u workload-toddle.service -n 20"
 echo "  Preview:      python3 $dest/toddle_sync.py --dry-run"

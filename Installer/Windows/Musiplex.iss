@@ -29,6 +29,9 @@ SolidCompression=yes
 CloseApplications=yes
 RestartApplications=no
 
+[Messages]
+WelcomeLabel2=This installs Musiplex on your computer.%n%nOn the next pages, pick the apps you want:%n%n•  Musiplex: your music library and player, with the notch, mini player, tray and the server your phones play from.%n•  Workload: your school tasks and deadlines, with Toddle deadlines brought in for you.%n%nBetter together: Workload keeps its list on your Musiplex server, so the same tasks show up on every device, and the Musiplex notch gets a Calendar tab with what's due. Workload's tray shows what Musiplex is playing.
+
 [Types]
 Name: "full"; Description: "Musiplex and Workload"
 Name: "musiplex"; Description: "Musiplex only"
@@ -38,9 +41,9 @@ Name: "workload"; Description: "Workload only"
 Name: "custom"; Description: "Choose"; Flags: iscustom
 
 [Components]
-Name: "musiplex"; Description: "Musiplex — your music: library, player, notch, mini player and the server for your phones"; Types: full musiplex
+Name: "musiplex"; Description: "Musiplex — your music: library, player, notch, mini player and the server for your phones (with Workload, the notch also shows your tasks)"; Types: full musiplex
 #ifexist "..\..\dist\Workload.exe"
-Name: "workload"; Description: "Workload — school tasks and deadlines, synced through Musiplex"; Types: full workload
+Name: "workload"; Description: "Workload — school tasks and deadlines; works best with Musiplex (synced tasks, notch Calendar, now playing in its tray)"; Types: full workload
 #endif
 
 [Tasks]

@@ -32,9 +32,10 @@ component musiplex "$musiplex" com.musiplex.pkg.musiplex
   <title>Musiplex $version</title>
   <welcome mime-type="text/plain"><![CDATA[Musiplex $version
 
-Choose the apps to install on the next page:
-• Musiplex: your music library, player, notch and the server for your phones.
-$( [ -n "$workload" ] && echo "• Workload: school tasks and deadlines, synced through Musiplex." )
+Pick the apps you want on the next page.
+
+• Musiplex: your music library and player, with the notch, mini player and the server your iPhone, Android and Apple Watch play from.
+$( [ -n "$workload" ] && printf '%s\n' "• Workload: your school tasks and deadlines, with Toddle deadlines brought in for you." "" "Better together: Workload keeps its list on your Musiplex server, so the same tasks show up on every device, and the Musiplex notch gets a Calendar tab with what's due today and tomorrow. Workload's menu bar shows what Musiplex is playing, with play and skip buttons. One app for your music, one for your work, kept in step." )
 
 Nothing about you is built in. Each Mac makes its own pairing PIN and key the first time it runs.]]></welcome>
   <options customize="always" require-scripts="false" hostArchitectures="arm64,x86_64"/>
@@ -45,13 +46,13 @@ XML
   [ -n "$workload" ] && echo '    <line choice="workload"/>'
   cat <<XML
   </choices-outline>
-  <choice id="musiplex" title="Musiplex" description="Your music: library, player, notch, mini player and the server for your iPhone, Android and Watch." start_selected="true">
+  <choice id="musiplex" title="Musiplex" description="Your music: library, player, notch, mini player and the server for your iPhone, Android and Watch. With Workload, the notch also shows your tasks in a Calendar tab." start_selected="true">
     <pkg-ref id="com.musiplex.pkg.musiplex"/>
   </choice>
   <pkg-ref id="com.musiplex.pkg.musiplex" version="$version">musiplex.pkg</pkg-ref>
 XML
   if [ -n "$workload" ]; then cat <<XML
-  <choice id="workload" title="Workload" description="School tasks and deadlines (Toddle imports), with a menu bar companion. Syncs through your Musiplex server." start_selected="true">
+  <choice id="workload" title="Workload" description="School tasks and deadlines, with Toddle deadlines brought in for you. Works best with Musiplex: it syncs through your Musiplex server, shows your tasks in the Musiplex notch, and its menu bar shows what's playing." start_selected="true">
     <pkg-ref id="com.musiplex.pkg.workload"/>
   </choice>
   <pkg-ref id="com.musiplex.pkg.workload" version="$version">workload.pkg</pkg-ref>
