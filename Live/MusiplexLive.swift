@@ -9,7 +9,10 @@ private let brand = LinearGradient(colors: [accent, accent2], startPoint: .topLe
 
 @main
 struct MusiplexLiveBundle: WidgetBundle {
-    var body: some Widget { MusiplexLiveActivity() }
+    var body: some Widget {
+        MusiplexLiveActivity()
+        MusiplexPlayWidget()
+    }
 }
 
 struct MusiplexLiveActivity: Widget {
@@ -151,5 +154,93 @@ private struct Controls: View {
         .font(.title3)
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
+    }
+}
+
+
+// MARK: Home Screen / Lock Screen widget: start the music without opening the app
+
+struct PlayEntry: TimelineEntry { let date: Date }
+
+struct PlayProvider: TimelineProvider {
+    func placeholder(in context: Context) -> PlayEntry { PlayEntry(date: .now) }
+    func getSnapshot(in context: Context, completion: @escaping (PlayEntry) -> Void) { completion(PlayEntry(date: .now)) }
+    func getTimeline(in context: Context, completion: @escaping (Timeline<PlayEntry>) -> Void) {
+        completion(Timeline(entries: [PlayEntry(date: .now)], policy: .never))
+    }
+}
+
+struct MusiplexPlayWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "MusiplexPlay", provider: PlayProvider()) { _ in
+            PlayWidgetView()
+        }
+        .configurationDisplayName("Play Music")
+        .description("Start Musiplex on this phone: songs picked for you, or the album you were on.")
+        .supportedFamilies([.systemSmall, .systemMedium, .accessoryCircular, .accessoryRectangular])
+    }
+}
+
+struct PlayWidgetView: View {
+    @Environment(\.widgetFamily) private var family
+
+    var body: some View {
+        switch family {
+        case .accessoryCircular:
+            Button(intent: StartPlaybackIntent("surprise")) {
+                ZStack {
+                    AccessoryWidgetBackground()
+                    Image(systemName: "play.fill").font(.title2)
+                }
+            }
+            .buttonStyle(.plain)
+            .containerBackground(.clear, for: .widget)
+        case .accessoryRectangular:
+            Button(intent: StartPlaybackIntent("surprise")) {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                    VStack(alignment: .leading) {
+                        Text("Musiplex").font(.headline)
+                        Text("Play something").font(.caption)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .containerBackground(.clear, for: .widget)
+        case .systemMedium:
+            HStack(spacing: 10) {
+                bigButton("Play Something", "sparkles", "surprise")
+                bigButton("Continue", "play.fill", "last")
+            }
+            .containerBackground(for: .widget) { background }
+        default:
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "music.note").font(.headline).foregroundStyle(brand)
+                    Text("Musiplex").font(.caption.weight(.bold)).foregroundStyle(.white.opacity(0.8))
+                }
+                Spacer(minLength: 0)
+                bigButton("Play Something", "sparkles", "surprise")
+            }
+            .containerBackground(for: .widget) { background }
+        }
+    }
+
+    private var background: some View {
+        LinearGradient(colors: [Color(red: 0.11, green: 0.10, blue: 0.16), .black], startPoint: .top, endPoint: .bottom)
+    }
+
+    private func bigButton(_ title: String, _ symbol: String, _ mode: String) -> some View {
+        Button(intent: StartPlaybackIntent(mode)) {
+            VStack(spacing: 6) {
+                Image(systemName: symbol).font(.title2.weight(.bold))
+                Text(title).font(.caption.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
+            }
+            .foregroundStyle(.black)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(brand, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 }

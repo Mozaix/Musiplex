@@ -35,6 +35,9 @@ enum PhoneRoute: Hashable {
 
 struct PhoneRoot: View {
     @Environment(PhoneModel.self) private var model
+    /// The mini player's artwork grows into the full player's (like Apple Music).
+    @Namespace private var playerSpace
+    @State private var dragDown: CGFloat = 0
     @State private var tab = PhoneTab.songs
     @State private var search = ""
     @State private var showLink = false
@@ -103,13 +106,27 @@ struct PhoneRoot: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if model.currentTrack != nil {
-                MiniPlayer().onTapGesture { model.showPlayer = true }
+            if model.currentTrack != nil, !model.showPlayer {
+                MiniPlayer(space: playerSpace).onTapGesture { model.showPlayer = true }
             }
         }
-        .sheet(isPresented: $model.showPlayer) {
-            NowPlayingView().presentationDragIndicator(.visible)
+        .overlay {
+            if model.showPlayer {
+                NowPlayingView(space: playerSpace) { model.showPlayer = false }
+                    .offset(y: dragDown)
+                    .gesture(DragGesture(minimumDistance: 12)
+                        .onChanged { dragDown = max(0, $0.translation.height) }
+                        .onEnded { g in
+                            if g.translation.height > 140 || g.predictedEndTranslation.height > 380 {
+                                model.showPlayer = false
+                            }
+                            withAnimation(.spring(duration: 0.35)) { dragDown = 0 }
+                        })
+                    .transition(.move(edge: .bottom))
+                    .zIndex(1)
+            }
         }
+        .animation(.spring(response: 0.42, dampingFraction: 0.86), value: model.showPlayer)
         .alert("New Playlist", isPresented: Binding(get: { model.newPlaylistIDs != nil }, set: { if !$0 { model.newPlaylistIDs = nil } })) {
             TextField("Playlist name", text: $newPlaylistName)
             Button("Create") {
@@ -728,13 +745,16 @@ struct PhoneRow: View {
 
 struct MiniPlayer: View {
     @Environment(PhoneModel.self) private var model
+    var space: Namespace.ID
 
     var body: some View {
         let state = model.session.state
         let track = model.currentTrack
         let audible = model.isLinked ? state.activeDevice : model.deviceID
         HStack(spacing: 12) {
-            ArtworkView(id: track?.id, radius: 6).frame(width: 42, height: 42)
+            ArtworkView(id: track?.id, radius: 6)
+                .matchedGeometryEffect(id: "art", in: space)
+                .frame(width: 42, height: 42)
             VStack(alignment: .leading, spacing: 2) {
                 Text(track?.title ?? "").font(.subheadline.weight(.semibold)).lineLimit(1)
                 Label(audible == model.deviceID ? "Playing on this \(model.deviceWord)" : "Playing on \(model.deviceName(audible))",
@@ -886,6 +906,8 @@ struct PhoneQueueView: View {
 
 struct NowPlayingView: View {
     @Environment(PhoneModel.self) private var model
+    var space: Namespace.ID
+    var close: () -> Void
     @State private var tint = Color.clear
     @State private var showQueue = false
 
@@ -896,10 +918,22 @@ struct NowPlayingView: View {
         let linked = model.isLinked
         let audible = linked ? state.activeDevice : model.deviceID
         ZStack {
-            LinearGradient(colors: [tint.opacity(0.75), Theme.bg], startPoint: .top, endPoint: .bottom).ignoresSafeArea()
+            LinearGradient(colors: [tint.opacity(0.75), Theme.bg], startPoint: .top, endPoint: .bottom)
+                .background(Theme.bg)
+                .ignoresSafeArea()
             VStack(spacing: 22) {
-                Spacer(minLength: 12)
+                // Grabber: tap it (or swipe down anywhere) to shrink back to the mini player.
+                Button(action: close) {
+                    Capsule().fill(Color.white.opacity(0.35)).frame(width: 40, height: 5)
+                        .frame(maxWidth: .infinity, minHeight: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close player")
+                Spacer(minLength: 4)
                 ArtworkView(id: track?.id, radius: 14)
+                    .matchedGeometryEffect(id: "art", in: space)
+                    .aspectRatio(1, contentMode: .fit)
                     .frame(maxWidth: 440)
                     .shadow(color: .black.opacity(0.5), radius: 24, y: 12)
                     .padding(.horizontal, 8)

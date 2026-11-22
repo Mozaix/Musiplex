@@ -1,0 +1,88 @@
+# Builds the Windows and Android apps on GitHub's machines and attaches them to a release.
+# Runs when a release is published, or by hand (Actions → Release builds → Run workflow).
+name: Release builds
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach the builds to (e.g. v2.3)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build Musiplex.exe
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install aiohttp mutagen zeroconf pyinstaller pillow
+          pyinstaller --onefile --noconsole --name Musiplex --icon Linux/musiplex.png `
+            --paths Linux --hidden-import musiplex_server --collect-submodules zeroconf `
+            Windows/musiplex_windows.py
+      - name: Check that the server starts
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/Musiplex.exe -ArgumentList "--serve" -PassThru
+          $ok = $false
+          foreach ($i in 1..40) {
+            Start-Sleep -Milliseconds 500
+            try { if ((Invoke-WebRequest http://127.0.0.1:7860/ping -UseBasicParsing).Content -like "musiplex*") { $ok = $true; break } } catch {}
+          }
+          Get-Content "$env:APPDATA/Musiplex/server.log" -ErrorAction SilentlyContinue
+          Stop-Process $p -Force
+          if (-not $ok) { throw "server didn't start" }
+      - name: Attach to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "$env:TAG".TrimStart("v")
+          Copy-Item dist/Musiplex.exe "Musiplex-$v-Windows.exe"
+          gh release upload "$env:TAG" "Musiplex-$v-Windows.exe" --clobber -R "${{ github.repository }}"
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Build the APK
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE }}
+          MUSIPLEX_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/musiplex.p12"
+            export MUSIPLEX_KEYSTORE="$RUNNER_TEMP/musiplex.p12"
+          fi
+          gradle -p Android assembleRelease --no-daemon
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${TAG#v}"
+          cp Android/app/build/outputs/apk/release/app-release.apk "Musiplex-$v-Android.apk"
+          gh release upload "$TAG" "Musiplex-$v-Android.apk" --clobber -R "${{ github.repository }}"

@@ -1,6 +1,6 @@
 # Musiplex
 
-Turn a Mac into a music server, and play from it on your iPhone, iPad and Apple Watch.
+Turn a Mac, Windows PC or Linux computer into a music server, and play from it on your iPhone, iPad, Apple Watch or Android phone.
 
 - **Mac app**: a library built from Apple Music and imported folders, with playlists, duplicate hiding, crossfade, a notch overlay (music, file box, clipboard, notes, currency, AirDrop) and a menu bar player.
 - **iPhone / iPad app**:
@@ -12,6 +12,24 @@ Turn a Mac into a music server, and play from it on your iPhone, iPad and Apple 
 - **Apple Watch app**: now playing, controls, the device picker and Digital Crown volume. It talks to the Watch through the iPhone.
 
 Devices find the Mac over home Wi‑Fi automatically, over Bluetooth when there's no Wi‑Fi, and through [Tailscale](https://tailscale.com) when you're away from home.
+
+## Download
+
+Everything is on the [latest release](https://github.com/Mozaix/Musiplex/releases/latest). Nothing personal is built into any of them: each server makes its own pairing PIN and key the first time it starts, and looks up its own addresses (home network and Tailscale) live.
+
+| Download | For | How |
+| --- | --- | --- |
+| `Musiplex-…-mac.zip` | Mac server | Unzip, drag to Applications. It isn't notarized, so the first time right-click it → **Open** (or run `xattr -dr com.apple.quarantine /Applications/Musiplex.app`). |
+| `Musiplex-…-Windows.exe` | Windows server | Run it. It starts at login from then on and adds **Musiplex** to the Start menu (right-click → Pin to taskbar). If Windows SmartScreen warns, click **More info → Run anyway**, and allow it on **private networks** when the firewall asks. |
+| `Musiplex-…-Linux.tar.gz` | Linux server | Unpack and run `./install.sh` in the `Linux` folder. See [Linux/README.md](Linux/README.md). |
+| `Musiplex-…-Android.apk` | Android phones | Open it on the phone and allow installing from your browser or Files app. Android 8 or newer. |
+| `Musiplex-…-iOS-unsigned.ipa` | iPhone / iPad / Watch | Unsigned: sideload with AltStore or Sideloadly, or build it from Xcode (below). |
+
+**Pairing:** a phone asks for the server's 6‑digit PIN once. It's in Musiplex's Settings on the Mac, and in the Musiplex window on Windows and Linux.
+
+**Windows details:** music is read from your **Music** folder and **Documents › Songs** (drop new files in **Documents › Songs › Floaters**). The PIN and settings live in `%APPDATA%\Musiplex`. To stop it starting at login, run `Musiplex.exe --uninstall`.
+
+**Android details:** pick your server from the list (same Wi‑Fi) or type its address (for example its Tailscale `100.x.y.z` address when you're away). Tap **Play here** to make the phone the speaker; otherwise it's a remote for whatever is playing. It keeps playing with the screen off.
 
 ---
 
@@ -210,5 +228,8 @@ You can't merge Bluetooth and Wi‑Fi into one faster connection: Bluetooth adds
 | `Live/`, `LiveShared/` | Dynamic Island / Live Activity widget |
 | `Shared/` | Models, playback engine (crossfade), shared UI |
 | `Config/` | Info.plist files |
+| `Linux/` | The Linux and Windows server (`musiplex_server.py`) and the Linux installer |
+| `Windows/` | The Windows launcher, built into `Musiplex.exe` by GitHub Actions |
+| `Android/` | The Android app (built into the APK by GitHub Actions) |
 
 The server uses port 7860 for HTTP (catalog, artwork and audio, with Range support) and port 7861 for WebSocket control, and advertises itself over Bonjour as `_musiplex._tcp`.

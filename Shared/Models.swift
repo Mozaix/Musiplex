@@ -49,7 +49,7 @@ struct PlaylistChange: Codable, Hashable {
 struct PlaylistVersion: Codable, Identifiable, Hashable {
     var number: Int
     var date: Date
-    /// Where the edit came from: "This Mac", "Hosam's iPhone", "Apple Music on Hosam's iPhone".
+    /// Where the edit came from: "This Mac", "Sam's iPhone", "Apple Music on Sam's iPhone".
     var source: String
     var changes: [PlaylistChange]
     /// Set when this version undid another one.
@@ -84,6 +84,7 @@ struct DeviceInfo: Codable, Identifiable, Hashable {
         switch kind {
         case "mac": "laptopcomputer"
         case "ipad": "ipad"
+        case "android": "smartphone"
         default: "iphone"
         }
     }

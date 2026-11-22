@@ -5,3 +5,7 @@ DerivedData/
 xcuserdata/
 *.xcuserstate
 *.ipa
+.gradle/
+local.properties
+*.p12
+*.keystore

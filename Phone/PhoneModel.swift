@@ -128,6 +128,10 @@ final class PhoneModel {
         session.durationOf = { [unowned self] in track($0)?.duration ?? 0 }
         nowPlaying = NowPlayingBridge { [unowned self] in send($0) }
         LiveControl.handler = { [unowned self] in send(Command(action: $0)) }
+        WidgetPlay.handler = { [unowned self] mode in
+            await readyForSiri()
+            if mode == "last" { playLastAlbum() } else { startSurprise() }
+        }
         watch.onCommand = { [unowned self] in send($0) }
         watch.onResend = { [unowned self] in publish() }
 

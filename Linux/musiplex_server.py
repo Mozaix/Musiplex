@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Musiplex server for Linux (headless).
+"""Musiplex server for Linux and Windows (headless).
 
 Speaks the same protocol as the Mac app, so the iPhone/iPad app connects to it
 exactly like it connects to a Mac: found on the home network automatically
@@ -49,7 +49,9 @@ except ImportError:  # Bonjour is optional (Tailscale / typed address still work
     AsyncZeroconf = None
 
 AUDIO = {".mp3", ".m4a", ".mp4", ".aac", ".wav", ".aif", ".aiff", ".flac", ".ogg", ".opus", ".caf"}
-CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "musiplex"
+WINDOWS = os.name == "nt"
+CONFIG = (Path(os.environ.get("APPDATA", Path.home())) / "Musiplex" if WINDOWS
+          else Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "musiplex")
 HOME = Path.home()
 FLOATERS = Path(os.environ.get("MUSIPLEX_FLOATERS", HOME / "Documents" / "Songs" / "Floaters"))
 
@@ -495,7 +497,7 @@ class Server:
         if not cfg.get("token"):
             cfg["token"] = secrets.token_hex(16)
             cfg["pin"] = f"{secrets.randbelow(10**6):06d}"
-        cfg.setdefault("name", args.name or f"{socket.gethostname()} (Linux)")
+        cfg.setdefault("name", args.name or f"{socket.gethostname()} ({'Windows' if WINDOWS else 'Linux'})")
         Library._save(cfg_file, cfg)
         self.token, self.pin, self.name = cfg["token"], cfg["pin"], cfg["name"]
         self.http_port = 7860 + args.port_offset
@@ -527,11 +529,31 @@ class Server:
 
     @staticmethod
     def addresses():
-        try:
-            out = subprocess.run(["ip", "-4", "-o", "addr", "show", "scope", "global"], capture_output=True, text=True).stdout
-        except Exception:
-            return []
-        return [line.split()[3].split("/")[0] for line in out.splitlines() if len(line.split()) > 3]
+        """This computer's IPv4 addresses, found fresh each time (nothing is stored)."""
+        found: list[str] = []
+        if not WINDOWS:
+            try:
+                out = subprocess.run(["ip", "-4", "-o", "addr", "show", "scope", "global"],
+                                     capture_output=True, text=True).stdout
+                found = [line.split()[3].split("/")[0] for line in out.splitlines() if len(line.split()) > 3]
+            except Exception:
+                pass
+        if not found:   # Windows (or no `ip`): every adapter's address, plus the one with the default route
+            try:
+                found = [a[4][0] for a in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)]
+            except OSError:
+                found = []
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                    s.connect(("192.0.2.1", 9))   # no packet is sent; just picks the outgoing interface
+                    found.insert(0, s.getsockname()[0])
+            except OSError:
+                pass
+        out: list[str] = []
+        for ip in found:
+            if ip not in out and not ip.startswith(("127.", "169.254.")):
+                out.append(ip)
+        return out
 
     @staticmethod
     def is_tailscale(ip):
@@ -1113,7 +1135,7 @@ DASHBOARD_VERSION = hashlib.sha256(DASHBOARD.encode()).hexdigest()[:12]
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Musiplex server for Linux")
+    parser = argparse.ArgumentParser(description="Musiplex server for Linux and Windows")
     parser.add_argument("--music", action="append", help="music folder (repeatable); default ~/Music and ~/Documents/Songs")
     parser.add_argument("--name", help="name shown on your devices")
     parser.add_argument("--port-offset", type=int, default=int(os.environ.get("MUSIPLEX_PORT_OFFSET", "0")))

@@ -229,24 +229,7 @@ struct NotchMusic: View {
                         icon("forward.fill", size: 17) { model.send("next") }
                         icon(state.repeatMode == .one ? "repeat.1" : "repeat", active: state.repeatMode != .off) { model.send("repeat") }
                         Spacer(minLength: 0)
-                        Menu {
-                            ForEach(model.server.devices) { device in
-                                Button {
-                                    model.send("device", text: device.id)
-                                } label: {
-                                    Label(device.id == "mac" ? "This Mac" : device.name,
-                                          systemImage: state.activeDevice == device.id ? "checkmark" : device.symbol)
-                                }
-                            }
-                        } label: {
-                            Label(state.activeDevice == "mac" ? "Mac" : model.server.name(of: state.activeDevice),
-                                  systemImage: state.activeDevice == "mac" ? "laptopcomputer" : "iphone")
-                                .font(.system(size: 11, weight: .semibold))
-                        }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                        .foregroundStyle(Theme.accent)
+                        SpeakerButton()
                     }
                 }
             }
@@ -599,5 +582,43 @@ struct CrossfadePicker: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+}
+
+
+/// The notch's speaker button: pick which device the music plays on (this Mac,
+/// or a connected iPhone, iPad or Android phone). The others mirror, muted.
+/// (A menu rather than a popover: it stays open while the notch is hovered away.)
+struct SpeakerButton: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let active = model.session.state.activeDevice
+        Menu {
+            Section("Play on") {
+                ForEach(model.server.devices) { device in
+                    Button {
+                        model.send("device", text: device.id)
+                    } label: {
+                        Label(device.id == "mac" ? "This Mac" : device.name,
+                              systemImage: active == device.id ? "checkmark" : device.symbol)
+                    }
+                }
+            }
+            if model.server.devices.count <= 1 {
+                Text("Open Musiplex on a phone to play there")
+            }
+        } label: {
+            Label(active == "mac" ? "Mac" : model.server.name(of: active), systemImage: "hifispeaker.2.fill")
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(Theme.accent.opacity(0.15), in: Capsule())
+        .foregroundStyle(Theme.accent)
+        .tint(Theme.accent)
+        .help("Choose the speaker")
     }
 }

@@ -1,0 +1,43 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.musiplex.android"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.musiplex.android"
+        minSdk 26
+        targetSdk 34
+        versionCode 5
+        versionName "2.3"
+    }
+
+    // Release signing: a key from the build's secrets when there is one (so updates
+    // install over the old app), else the build machine's throwaway debug key.
+    def ks = System.getenv("MUSIPLEX_KEYSTORE")
+    signingConfigs {
+        release {
+            if (ks) {
+                storeFile file(ks)
+                storeType "pkcs12"
+                storePassword System.getenv("MUSIPLEX_KEYSTORE_PASSWORD")
+                keyAlias "musiplex"
+                keyPassword System.getenv("MUSIPLEX_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig ks ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
