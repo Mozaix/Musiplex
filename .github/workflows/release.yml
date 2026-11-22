@@ -40,6 +40,15 @@ jobs:
             --collect-all webview --hidden-import clr --hidden-import pystray._win32 `
             --add-data "Client/musiplex.html;." --add-data "Linux/musiplex.png;." `
             Windows/musiplex_windows.py
+      - name: Build Workload.exe (when the Workload sources are in the repo)
+        if: hashFiles('Workload/Windows/workload_windows.py') != ''
+        shell: pwsh
+        run: |
+          $icon = if (Test-Path Workload/Windows/workload.png) { "Workload/Windows/workload.png" } else { "Linux/musiplex.png" }
+          pyinstaller --onefile --noconsole --name Workload --icon $icon `
+            --collect-all webview --hidden-import clr --hidden-import pystray._win32 `
+            --add-data "Workload/Web/workload.html;." --add-data "${icon};." `
+            Workload/Windows/workload_windows.py
       - name: Check that the server starts
         shell: pwsh
         run: |
@@ -70,14 +79,23 @@ jobs:
           Get-Process Musiplex -ErrorAction SilentlyContinue | Stop-Process -Force
           Write-Host "app still running: $alive, server answering: $up"
           if (-not ($alive -and $up)) { throw "the app didn't stay up" }
+      - name: Build the installer (Musiplex and Workload checkboxes)
+        shell: pwsh
+        run: |
+          python -c "from PIL import Image; Image.open('Linux/musiplex.png').save('Installer/Windows/musiplex.ico', sizes=[(256,256),(64,64),(48,48),(32,32),(16,16)])"
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null; $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          $v = "$env:TAG".TrimStart("v")
+          & $iscc "/DAppVersion=$v" Installer/Windows/Musiplex.iss
+          if ($LASTEXITCODE -ne 0) { throw "installer build failed" }
       - name: Attach to the release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $v = "$env:TAG".TrimStart("v")
-          Copy-Item dist/Musiplex.exe "Musiplex-$v-Windows.exe"
-          gh release upload "$env:TAG" "Musiplex-$v-Windows.exe" --clobber -R "${{ github.repository }}"
+          gh release upload "$env:TAG" "dist/Musiplex-$v-Windows-Setup.exe" --clobber -R "${{ github.repository }}"
 
   android:
     runs-on: ubuntu-latest
@@ -102,10 +120,16 @@ jobs:
             export MUSIPLEX_KEYSTORE="$RUNNER_TEMP/musiplex.p12"
           fi
           gradle -p Android assembleRelease --no-daemon
+      - name: Build the Workload APK (when the Workload sources are in the repo)
+        if: hashFiles('Workload/Android/settings.gradle', 'Workload/Android/settings.gradle.kts') != ''
+        run: gradle -p Workload/Android assembleRelease --no-daemon
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           v="${TAG#v}"
           cp Android/app/build/outputs/apk/release/app-release.apk "Musiplex-$v-Android.apk"
-          gh release upload "$TAG" "Musiplex-$v-Android.apk" --clobber -R "${{ github.repository }}"
+          files="Musiplex-$v-Android.apk"
+          w=$(ls Workload/Android/app/build/outputs/apk/release/*.apk 2>/dev/null | head -1)
+          if [ -n "$w" ]; then cp "$w" "Workload-$v-Android.apk"; files="$files Workload-$v-Android.apk"; fi
+          gh release upload "$TAG" $files --clobber -R "${{ github.repository }}"

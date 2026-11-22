@@ -191,6 +191,10 @@ body.n{background:transparent}
 .drop{border:1.5px dashed rgba(255,255,255,.25);border-radius:12px;padding:14px;text-align:center;color:var(--dim);font-size:13px}
 .drop.over{border-color:var(--accent);color:#fff;background:rgba(163,138,255,.1)}
 .fileitem{display:flex;align-items:center;gap:8px;padding:5px 2px;font-size:13px}.fileitem span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.task{display:flex;align-items:center;gap:10px;padding:7px 16px;font-size:14.5px}.task i{width:8px;height:8px;border-radius:50%;flex:none}
+.task span:nth-child(2){flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task span:last-child{color:var(--dim);font-size:12.5px;white-space:nowrap}
+.taskday{font:600 10.5px ui-monospace,Consolas,monospace;letter-spacing:.12em;color:var(--dim);padding:12px 16px 2px}
+#notch .task{padding:3px 0;font-size:12.5px}#notch .taskday{padding:8px 0 2px;font-size:9px}
 .clip{display:block;width:100%;text-align:left;padding:6px 8px;border-radius:8px;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.clip:hover{background:var(--raised)}
 </style></head>
 <body>
@@ -239,6 +243,7 @@ body.n{background:transparent}
 <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></symbol>
 <symbol id="i-link" viewBox="0 0 24 24"><path d="M14 3h7v7h-2V6.4l-8.3 8.3-1.4-1.4L17.6 5H14zM5 5h6v2H5v12h12v-6h2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/></symbol>
 <symbol id="i-copy" viewBox="0 0 24 24"><path d="M8 3h11a2 2 0 0 1 2 2v11h-2V5H8zM5 7h11a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zm0 2v11h11V9z"/></symbol>
+<symbol id="i-cal" viewBox="0 0 24 24"><path d="M7 2h2v2h6V2h2v2h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2zM5 10v10h14V10zm2 2h4v4H7z"/></symbol>
 <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
 </svg>
 
@@ -793,15 +798,15 @@ function render() {
   const c = $("content"); if (!c) return;
   c.innerHTML = "";
   if ($("phone")) {
-    const tabbed = ["songs", "albums", "playlists", "offline", "history"].includes(route.v);
+    const tabbed = ["songs", "albums", "playlists", "offline", "history", "calendar"].includes(route.v);
     $("seg").classList.toggle("hidden", !tabbed);
-    $("searchbox").classList.toggle("hidden", !tabbed || route.v === "playlists" || route.v === "history");
+    $("searchbox").classList.toggle("hidden", !tabbed || route.v === "playlists" || route.v === "history" || route.v === "calendar");
     document.querySelectorAll("#seg button").forEach(x => x.classList.toggle("on", x.dataset.tab === route.v));
   }
   const q = query.trim().toLowerCase();
   if (wide() && q) return viewSearch(c, q);
   const V = { home: viewHome, songs: viewSongs, albums: viewAlbums, artists: viewArtists, playlists: viewPlaylists, offline: viewOffline,
-    history: viewHistory, settings: viewSettings, list: viewList, surprise: viewSurprise }[route.v] || viewSongs;
+    history: viewHistory, settings: viewSettings, list: viewList, surprise: viewSurprise, calendar: viewCalendar }[route.v] || viewSongs;
   V(c, q);
 }
 function title(c, t, n) { if (wide()) c.appendChild(h(`<h1>${esc(t)}${n != null ? ` <small>${n}</small>` : ""}</h1>`)); }
@@ -1230,7 +1235,7 @@ function buildPhone() {
   $("root").innerHTML = `
   <div id="phone">
     <header><h1>Musiplex</h1><button class="status" id="status"><i class="statusdot"></i><span class="statuslabel">Searching…</span></button><button class="gear" id="gear">${icon("gear")}</button></header>
-    <div class="seg" id="seg"><button data-tab="songs">Songs</button><button data-tab="albums">Albums</button><button data-tab="playlists">Playlists</button>${ANDROID ? `<button data-tab="offline">Offline</button>` : ""}<button data-tab="history">History</button></div>
+    <div class="seg" id="seg"><button data-tab="songs">Songs</button><button data-tab="albums">Albums</button><button data-tab="playlists">Playlists</button>${ANDROID ? `<button data-tab="offline">Offline</button>` : ""}<button data-tab="history">History</button><button data-tab="calendar">${icon("cal")}</button></div>
     <div class="search" id="searchbox">${icon("search")}<input id="search" placeholder="Search" type="search" autocomplete="off"></div>
     <div id="content"></div>
   </div>
@@ -1353,9 +1358,75 @@ function buildMini() {
 }
 function drawMiniQueue() { const q = $("mql"); if (q && !q.classList.contains("hidden")) queueRows(q); }
 
+// ======================================================================= Calendar (Workload's school tasks)
+// Tasks live on a Musiplex server (normally the Linux laptop) at /tasks. On Windows the app
+// reads the server Workload syncs with; elsewhere it asks the server this app is connected to.
+const URGENCY = { green: "#448361", yellow: "#CB912F", red: "#D44C47" };
+let tasksCache = null, tasksAt = 0;
+function loadTasks(done) {
+  const finish = list => { tasksCache = list; tasksAt = Date.now(); done(list); };
+  if (api && api.tasks) return api.tasks().then(r => finish(r && Array.isArray(r.tasks) ? r.tasks : null)).catch(() => finish(null));
+  if (local) return L.get("/local/tasks").then(r => finish(r.tasks || [])).catch(() => finish(null));
+  if (!linked()) return finish(null);
+  get(`${base()}/tasks?t=${tok()}`, (status, text) => { let r = null; try { r = status === 200 ? JSON.parse(text) : null; } catch {} finish(r ? r.tasks || [] : null); });
+}
+function taskDate(due) {
+  if (!due) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/.exec(due); if (!m) return null;
+  return { d: new Date(+m[1], +m[2] - 1, +m[3], m[4] ? +m[4] : 0, m[5] ? +m[5] : 0), allDay: !m[4] };
+}
+function overdue(t, now) {
+  const x = taskDate(t.due); if (!x) return false;
+  if (x.allDay) { const today = new Date(now); today.setHours(0, 0, 0, 0); return x.d < today; }
+  return x.d < now;
+}
+function taskDays(list) {
+  const now = new Date(), today = new Date(now); today.setHours(0, 0, 0, 0);
+  const open = (list || []).filter(t => !t.done && !t.deleted)
+    .sort((a, b) => ((taskDate(a.due) || { d: new Date(8.64e15) }).d - (taskDate(b.due) || { d: new Date(8.64e15) }).d) || a.title.localeCompare(b.title));
+  const out = [], od = open.filter(t => overdue(t, now));
+  if (od.length) out.push({ title: "Overdue", red: true, items: od });
+  const groups = new Map();
+  for (const t of open) {
+    if (overdue(t, now)) continue;
+    const x = taskDate(t.due); if (!x) continue;
+    const k = new Date(x.d); k.setHours(0, 0, 0, 0);
+    if (!groups.has(+k)) groups.set(+k, []); groups.get(+k).push(t);
+  }
+  for (const [k, items] of groups) {
+    const days = Math.round((k - today) / 864e5);
+    const d = new Date(k);
+    const title = days === 0 ? "Today" : days === 1 ? "Tomorrow" : days < 7 ? d.toLocaleDateString([], { weekday: "long" }) : d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+    out.push({ title, items });
+  }
+  const none = open.filter(t => !t.due); if (none.length) out.push({ title: "No date", items: none });
+  return out;
+}
+function drawTasks(c, list) {
+  if (list === null) return empty(c, "cal", local || ANDROID ? "No tasks here yet. Tasks from Workload show up once its server has them (the Linux server keeps them)." : "Connect to the server that keeps your Workload tasks.");
+  const days = taskDays(list);
+  if (!days.length) return empty(c, "check", "Nothing due. Enjoy it.");
+  const now = new Date();
+  days.forEach(day => {
+    c.appendChild(h(`<div class="taskday" style="${day.red ? "color:" + URGENCY.red : ""}">${esc(day.title.toUpperCase())}</div>`));
+    day.items.forEach(t => {
+      const x = taskDate(t.due);
+      const color = overdue(t, now) ? URGENCY.red : URGENCY[t.urgency] || URGENCY.green;
+      c.appendChild(h(`<div class="task"><i style="background:${color}"></i><span>${esc(t.title)}</span><span>${x && !x.allDay ? x.d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "All day"}</span></div>`));
+    });
+  });
+}
+function viewCalendar(c) {
+  title(c, "Calendar");
+  const box = h(`<div></div>`); c.appendChild(box);
+  if (tasksCache) drawTasks(box, tasksCache); else box.innerHTML = `<div class="empty">Loading…</div>`;
+  if (Date.now() - tasksAt > 10000) loadTasks(list => { if (route.v === "calendar" && box.isConnected) { box.innerHTML = ""; drawTasks(box, list); } });
+}
+setInterval(() => { if (route.v === "calendar" || (MODE === "notch" && notchOpen && notchTab === "calendar")) loadTasks(() => render()); }, 300000);
+
 // ======================================================================= notch window
 let notchOpen = false, notchTab = store.get("notchTab", "music"), notchTimer = null;
-const NTABS = [["music", "note", "Music"], ["files", "box", "File Box"], ["clipboard", "clip", "Clipboard"], ["notes", "pen", "Notes"], ["money", "money", "Currency"], ["settings", "gear", "Settings"], ["power", "bolt", "Battery"]];
+const NTABS = [["music", "note", "Music"], ["calendar", "cal", "Calendar"], ["files", "box", "File Box"], ["clipboard", "clip", "Clipboard"], ["notes", "pen", "Notes"], ["money", "money", "Currency"], ["settings", "gear", "Settings"], ["power", "bolt", "Battery"]];
 function buildNotch() {
   document.body.className = "desk n";
   $("root").innerHTML = `<div id="notch"><div class="pill" id="npill"><div class="art np-art"></div><span class="dim" id="nbat" style="font-size:11px;font-weight:600"></span><div class="bars" id="nbars"><i></i><i></i><i></i><i></i></div></div>
@@ -1410,6 +1481,13 @@ function drawNotch() {
     return;
   }
   notchDrawnFor = "";
+  if (notchTab === "calendar") {
+    p.innerHTML = "";
+    const show = list => { if (notchTab !== "calendar") return; p.innerHTML = ""; const box = h(`<div></div>`); p.appendChild(box); drawTasks(box, list); };
+    if (tasksCache) show(tasksCache); else p.innerHTML = `<div class="empty" style="padding:30px">Loading…</div>`;
+    if (Date.now() - tasksAt > 10000) loadTasks(show);
+    return;
+  }
   if (notchTab === "files") {
     p.innerHTML = `<div style="display:flex;gap:14px;height:100%"><div class="drop" id="fdrop" style="flex:1;display:grid;place-items:center">${icon("box")}<div>Drop files here to keep them<br><span style="font-size:11px">Music files go to Floating</span></div></div><div style="flex:1.3;min-width:0;display:flex;flex-direction:column"><div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13px">File Box</b><button class="btn small" id="fopen">${icon("folder")} Open</button></div><div id="flist" style="overflow-y:auto;flex:1"></div></div></div>`;
     const drop = $("fdrop");

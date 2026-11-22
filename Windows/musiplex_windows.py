@@ -23,6 +23,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -38,6 +39,8 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 SHORTCUT = Path(os.environ.get("APPDATA", Path.home())) / "Microsoft/Windows/Start Menu/Programs/Musiplex.lnk"
 NO_WINDOW = 0x08000000
 BUNDLE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+# Left by the installer (Inno Setup's uninstaller sits next to the apps), so its choices win.
+INSTALLED = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Musiplex Apps" / "unins000.exe"
 
 
 # ----------------------------------------------------------------------------- helpers
@@ -59,12 +62,25 @@ def local_post(path: str, body: dict):
         pass
 
 
+def run_key_set() -> bool:
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            winreg.QueryValueEx(k, "Musiplex")
+            return True
+    except OSError:
+        return False
+
+
 def prefs() -> dict:
+    """Notch on by default. Start at login: what you chose in Settings, else whatever the
+    installer set up (or on for a plain Musiplex.exe run without the installer)."""
     try:
         p = json.loads(PREFS.read_text())
     except Exception:
         p = {}
-    return {"notch": p.get("notch", True), "startup": p.get("startup", True)}
+    startup = p["startup"] if "startup" in p else (run_key_set() or not INSTALLED.exists())
+    return {"notch": p.get("notch", True), "startup": startup}
 
 
 def save_prefs(p: dict):
@@ -257,6 +273,27 @@ class Api:
     def open_url(self, url: str):
         if url.startswith(("https://", "http://")):
             webbrowser.open(url)
+
+    def tasks(self):
+        """Workload's school tasks for the notch Calendar: from the server Workload syncs with
+        (%APPDATA%\\Workload\\sync.json), else this PC's own Musiplex server."""
+        sources = []
+        try:
+            sync = json.loads((Path(os.environ.get("APPDATA", Path.home())) / "Workload" / "sync.json").read_text())
+            host, token = str(sync.get("host") or ""), str(sync.get("token") or "")
+            if host and token:
+                q = urllib.parse.urlencode({"t": token})
+                sources.append(f"http://{host}:{PORT}/tasks?{q}")
+        except Exception:
+            pass
+        sources.append(URL + "local/tasks")
+        for url in sources:
+            try:
+                with urllib.request.urlopen(url, timeout=5) as r:
+                    return json.loads(r.read())
+            except Exception:
+                continue
+        return None
 
     def get_prefs(self):
         return prefs()
