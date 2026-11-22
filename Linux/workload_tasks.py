@@ -13,7 +13,8 @@ Routes
   GET  /tasks?t=<token>          -> {"tasks": [...], "now": <epoch>}
   POST /tasks?t=<token>          body {"tasks": [...]}; merged, returns the same as GET
   POST /local/tasks              this computer only (header X-Musiplex: 1);
-                                 body {"source": "toddle", "tasks": [{"sourceId","title","due"}]}
+                                 body {"source": "toddle", "tasks": [{"sourceId","title","due"}],
+                                       "complete": bool}  (complete: remove upcoming ones no longer listed)
   GET  /local/tasks              this computer only; same as GET /tasks
 
 A task:
@@ -121,16 +122,21 @@ class TaskStore:
                 self._prune()
                 self._save()
 
-    def import_feed(self, source: str, items: list) -> int:
+    def import_feed(self, source: str, items: list, complete: bool = False) -> tuple[int, int]:
         """Tasks from Toddle: new ones are added; existing ones get the feed's
-        title and due date, but keep the urgency and done mark you set."""
+        title and due date, but keep the urgency and done mark you set.
+
+        With `complete` (every feed fetched fine), upcoming deadlines that are no
+        longer in Toddle are removed. Past ones and ones you finished stay."""
         now = time.time()
-        added = 0
+        added = removed = 0
+        seen: set[str] = set()
         with self.lock:
             for it in items if isinstance(items, list) else []:
                 if not isinstance(it, dict) or not it.get("sourceId") or not it.get("title"):
                     continue
                 tid = f"{source}-{it['sourceId']}"[:200]
+                seen.add(tid)
                 title = str(it["title"])[:500]
                 due = it.get("due") if isinstance(it.get("due"), str) else None
                 mine = self.tasks.get(tid)
@@ -140,8 +146,15 @@ class TaskStore:
                     added += 1
                 elif not mine["deleted"] and (mine["title"] != title or mine["due"] != due):
                     mine.update(title=title, due=due, updated=now)
+            if complete and seen:
+                today = datetime.now().strftime("%Y-%m-%d")
+                for t in self.tasks.values():
+                    if (t["source"] == source and t["id"].startswith(source + "-") and t["id"] not in seen
+                            and not t["deleted"] and not t["done"] and (t["due"] or "") >= today):
+                        t.update(deleted=True, title="", updated=now)
+                        removed += 1
             self._save()
-        return added
+        return added, removed
 
 
 def install(router, server, config_dir: Path) -> TaskStore:
@@ -178,8 +191,10 @@ def install(router, server, config_dir: Path) -> TaskStore:
             body = await request.json()
         except ValueError:
             return web.Response(status=400)
-        added = store.import_feed(str(body.get("source") or "toddle"), body.get("tasks"))
-        return web.json_response({"added": added, "total": len(store.tasks)})
+        added, removed = store.import_feed(str(body.get("source") or "toddle"), body.get("tasks"),
+                                           complete=bool(body.get("complete")))
+        live = sum(1 for t in store.tasks.values() if not t["deleted"])
+        return web.json_response({"added": added, "removed": removed, "total": live})
 
     router.add_get("/tasks", get_tasks)
     router.add_post("/tasks", post_tasks)
@@ -220,6 +235,12 @@ if __name__ == "__main__":
             return web.Response(status=401)
         return web.json_response({"token": a.token, "name": "Workload test server", "hosts": []})
 
+    page = Path(__file__).resolve().parent.parent / "Web" / "workload.html"
+
+    async def index(_):
+        return web.FileResponse(page) if page.exists() else web.Response(text="musiplex")
+
+    app.router.add_get("/", index)
     app.router.add_get("/ping", ping)
     app.router.add_get("/pair", pair)
     install(app.router, stub, Path(a.dir))

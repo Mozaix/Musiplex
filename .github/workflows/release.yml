@@ -49,6 +49,13 @@ jobs:
             --collect-all webview --hidden-import clr --hidden-import pystray._win32 `
             --add-data "Workload/Web/workload.html;." --add-data "${icon};." `
             Workload/Windows/workload_windows.py
+      - name: Check that Workload.exe starts (selftest)
+        if: hashFiles('Workload/Windows/workload_windows.py') != ''
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/Workload.exe -ArgumentList "--selftest" -Wait -PassThru
+          Write-Host "Workload selftest exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "Workload selftest failed" }
       - name: Check that the server starts
         shell: pwsh
         run: |

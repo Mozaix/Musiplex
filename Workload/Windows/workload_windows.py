@@ -9,7 +9,8 @@ Tasks sync with your Musiplex server (the CachyOS laptop) over the Wi‑Fi, foun
 automatically with Bonjour, or over Tailscale when you're away.
 
 Command line: `--background` (tray only, what runs at login), `--uninstall`
-(stop starting at login, remove the Start menu shortcut).
+(stop starting at login, remove the Start menu shortcut), `--selftest` (open the
+page hidden and exit 0 if it works; used by the release build).
 
 Installed at %LOCALAPPDATA%\\Workload\\Workload.exe by the Musiplex/Workload installer.
 
@@ -306,7 +307,43 @@ def set_login_item(on: bool):
                 pass
 
 
+class SelftestApi:
+    """What the page needs, with nothing saved and no network."""
+    def request(self, method, url, body=None): return {"status": -1, "text": "selftest"}
+    def load(self): return None
+    def save(self, text): pass
+    def discover(self): return []
+    def musiplex_local(self): return None
+    def open_main(self): pass
+    def quit(self): pass
+
+
+def selftest() -> int:
+    """For the release build: open the page hidden, check it started, exit 0 (or 1)."""
+    import webview
+    result = {"ok": False}
+    win = webview.create_window(APP, page_path().as_uri() + "?shell=pywebview", hidden=True, js_api=SelftestApi())
+
+    def check():
+        import time
+        for _ in range(60):
+            time.sleep(0.5)
+            try:
+                if win.evaluate_js("typeof parseEntry === 'function' && parseEntry('Essay - Dec 3').title === 'Essay'"):
+                    result["ok"] = True
+                    break
+            except Exception:
+                pass
+        print("selftest", "passed" if result["ok"] else "FAILED", flush=True)
+        os._exit(0 if result["ok"] else 1)   # the window loop doesn't always end on its own
+
+    webview.start(check, private_mode=True)
+    return 1
+
+
 def main():
+    if "--selftest" in sys.argv:
+        sys.exit(selftest())
     if "--uninstall" in sys.argv:
         set_login_item(False)
         SHORTCUT.unlink(missing_ok=True)
