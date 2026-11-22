@@ -36,7 +36,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install aiohttp mutagen zeroconf pyinstaller pillow pywebview pystray
           pyinstaller --onefile --noconsole --name Musiplex --icon Linux/musiplex.png `
-            --paths Linux --hidden-import musiplex_server --collect-submodules zeroconf `
+            --paths Linux --hidden-import musiplex_server --hidden-import workload_tasks --collect-submodules zeroconf `
             --collect-all webview --hidden-import clr --hidden-import pystray._win32 `
             --add-data "Client/musiplex.html;." --add-data "Linux/musiplex.png;." `
             Windows/musiplex_windows.py
@@ -53,6 +53,8 @@ jobs:
           try { $page = (Invoke-WebRequest http://127.0.0.1:7860/app -UseBasicParsing).StatusCode } catch {}
           Get-Content "$env:APPDATA/Musiplex/server.log" -ErrorAction SilentlyContinue
           Stop-Process $p -Force
+          Get-Process Musiplex -ErrorAction SilentlyContinue | Stop-Process -Force   # the one-file exe's child too
+          Start-Sleep -Seconds 2
           if (-not $ok) { throw "server didn't start" }
           if ($page -ne 200) { throw "app page missing ($page)" }
       - name: Check that the app opens (windows, tray, server)
@@ -65,7 +67,7 @@ jobs:
           $up = $false
           try { $up = (Invoke-WebRequest http://127.0.0.1:7860/ping -UseBasicParsing).Content -like "musiplex*" } catch {}
           Get-Content "$env:APPDATA/Musiplex/server.log" -ErrorAction SilentlyContinue
-          if ($alive) { Stop-Process $p -Force }
+          Get-Process Musiplex -ErrorAction SilentlyContinue | Stop-Process -Force
           Write-Host "app still running: $alive, server answering: $up"
           if (-not ($alive -and $up)) { throw "the app didn't stay up" }
       - name: Attach to the release

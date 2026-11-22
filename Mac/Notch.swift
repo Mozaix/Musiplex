@@ -3,12 +3,13 @@ import Observation
 import SwiftUI
 
 enum NotchTab: String, CaseIterable, Identifiable {
-    case music, files, clipboard, notes, money, airdrop, settings, power
+    case music, calendar, files, clipboard, notes, money, airdrop, settings, power
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .music: "Music"
+        case .calendar: "Calendar"
         case .files: "File Box"
         case .clipboard: "Clipboard"
         case .notes: "Notes"
@@ -22,6 +23,7 @@ enum NotchTab: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .music: "music.note"
+        case .calendar: "calendar"
         case .files: "tray.full.fill"
         case .clipboard: "doc.on.clipboard.fill"
         case .notes: "note.text"
@@ -33,7 +35,7 @@ enum NotchTab: String, CaseIterable, Identifiable {
     }
 
     /// Tabs either side of the camera notch.
-    static let left: [NotchTab] = [.music, .files, .clipboard, .notes]
+    static let left: [NotchTab] = [.music, .calendar, .files, .clipboard, .notes]
     static let right: [NotchTab] = [.money, .airdrop, .settings]
 }
 
@@ -502,6 +504,7 @@ struct ExpandedNotch: View {
             Group {
                 switch state.tab {
                 case .music: NotchMusic()
+                case .calendar: NotchCalendar()
                 case .files: NotchFileBox()
                 case .clipboard: NotchClipboard()
                 case .notes: NotchNotes()

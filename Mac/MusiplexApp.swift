@@ -46,6 +46,8 @@ final class AppModel {
     let browser = Browser()
     /// A Linux (or other) Musiplex server whose Floaters are copied here.
     let linked = LinkedServer()
+    /// Workload's school tasks (from the linked Linux server), for the notch calendar.
+    @ObservationIgnored lazy var workload = WorkloadTasks(linked: linked)
     let spotify = SpotifyLink()
     let discover = Discover()
     /// The Mac's sound outputs (speakers, AirPods, Bluetooth speakers, AirPlay).

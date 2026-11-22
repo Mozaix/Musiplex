@@ -51,6 +51,18 @@ final class LinkedServer {
         startLive()
     }
 
+    /// GET a path on the linked server with its key (tries each of its addresses).
+    func get(_ path: String) async -> Data? {
+        guard let token else { return nil }
+        for host in hosts {
+            guard let url = URL(string: "http://\(host):\(Net.httpPort)/\(path)\(path.contains("?") ? "&" : "?")t=\(token)"),
+                  let (data, response) = try? await session.data(from: url),
+                  (response as? HTTPURLResponse)?.statusCode == 200 else { continue }
+            return data
+        }
+        return nil
+    }
+
     @ObservationIgnored private var lastKey = ""
 
     /// Call when playback may have changed; tells the server at once if the song or play/pause did.

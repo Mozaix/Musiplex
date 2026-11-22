@@ -10,6 +10,7 @@ python3 -m venv "$dest/venv"
 "$dest/venv/bin/pip" install --quiet --upgrade pip
 "$dest/venv/bin/pip" install --quiet aiohttp mutagen zeroconf
 install -m 755 "$here/musiplex_server.py" "$dest/musiplex_server.py"
+install -m 644 "$here/workload_tasks.py" "$dest/workload_tasks.py"
 # The app window (shared with Android and Windows).
 install -m 644 "$here/../Client/musiplex.html" "$dest/musiplex.html"
 install -m 755 "$here/musiplex-open" "$dest/musiplex-open"

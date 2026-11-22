@@ -1429,6 +1429,11 @@ class Server:
         http.router.add_route("*", "/local/filebox", self.local_filebox)
         http.router.add_post("/local/open", self.local_open)
         http.router.add_get("/local/battery", self.local_battery)
+        try:                         # Workload's school tasks (shown in the notch calendar)
+            import workload_tasks
+            workload_tasks.install(http.router, self, CONFIG)
+        except ImportError:
+            pass
         http.router.add_post("/linked/nowplaying", self.linked_nowplaying)
         ws = web.Application()
         ws.router.add_get("/", self.socket)

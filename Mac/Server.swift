@@ -39,8 +39,9 @@ final class Server {
     let macName = Host.current().localizedName ?? "Mac"
 
     var phones: [Client] { clients.filter { $0.authed && !$0.backup } }
-    /// Phones and iPads you can pick as the speaker (not a linked server's live link).
-    var listeners: [Client] { phones.filter { $0.kind != "server" } }
+    /// Phones and iPads you can pick as the speaker — not a linked server's live link, and not
+    /// "panel" windows that only show what's playing (Workload's menu bar, mini players).
+    var listeners: [Client] { phones.filter { $0.kind != "server" && $0.kind != "panel" } }
 
     /// Every device that can be picked as the speaker, this Mac first.
     /// (A linked server's live link, kind "server", follows along but is never a speaker.)
