@@ -47,6 +47,7 @@ final class AppModel {
     /// A Linux (or other) Musiplex server whose Floaters are copied here.
     let linked = LinkedServer()
     let spotify = SpotifyLink()
+    let discover = Discover()
     @ObservationIgnored private(set) var recorder: ListeningRecorder!
     @ObservationIgnored private var guessHour = -1
     @ObservationIgnored private var guessTimer: Timer?
@@ -204,6 +205,15 @@ final class AppModel {
         terms = terms.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
         let have = Set(library.tracks.map { songKey(title: $0.title, artist: $0.artist) })
         Task { await spotify.makePlaylist(genre: genre, searchTerms: terms, have: have) }
+    }
+
+    /// New songs like yours in a genre (Apple's free search; no Spotify needed).
+    func discoverGenre(_ genre: String) {
+        var counts: [String: Int] = [:]
+        for t in tracks(inGenre: genre) { counts[t.artist, default: 0] += 1 }
+        let artists = counts.sorted { $0.value > $1.value }.map(\.key)
+        let have = Set(library.tracks.map { songKey(title: $0.title, artist: $0.artist) })
+        Task { await discover.find(genre: genre, artists: artists, have: have) }
     }
 
     /// "Hip-Hop/Rap" → ["hip hop", "rap"]; "R&B/Soul" → ["r&b", "soul"].

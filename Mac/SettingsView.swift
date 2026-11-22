@@ -10,12 +10,12 @@ struct SettingsView: View {
             Text("Settings").font(.system(size: 26, weight: .bold))
             SettingsCard(title: "Server", symbol: "antenna.radiowaves.left.and.right") { DevicesCard() }
             TasteCard()
-            SpotifyCard()
             FloatingCard()
             LinkedServerCard()
             AppleMusicCard()
             RemoteAccessCard()
             VersionHistoryCard(history: model.library.history)
+            SpotifyCard()
         }
     }
 }
@@ -259,7 +259,7 @@ struct TasteCard: View {
                             Text(result).font(.caption).foregroundStyle(Theme.dim).padding(.leading, 160)
                         }
                     }
-                    Text("Use the buttons next to a genre to make a playlist of your songs in it, or one of new songs like them on Spotify.")
+                    Text("Next to each genre: make a playlist of your songs in it, or discover new songs like them (preview them, and turn them into a Spotify playlist with a free account).")
                         .font(.caption).foregroundStyle(Theme.dim)
                 }
                 Text("Learned from \(model.recommender.playedCount) songs you've played. Everything stays on your devices.")
@@ -284,19 +284,27 @@ struct TasteCard: View {
 private struct GenreActions: View {
     @Environment(AppModel.self) private var model
     let genre: String
+    @State private var showDiscover = false
 
     var body: some View {
         let spotify = model.spotify
         HStack(spacing: 6) {
             Button { model.makeGenrePlaylist(genre) } label: { Image(systemName: "text.badge.plus") }
                 .help("Make a Musiplex playlist of your \(genre) songs")
-            if spotify.working == genre {
-                ProgressView().controlSize(.small).frame(width: 24)
-            } else {
-                Button { model.makeSpotifyPlaylist(genre) } label: { Image(systemName: "sparkle.magnifyingglass") }
-                    .disabled(!spotify.connected || spotify.working != nil)
-                    .help(spotify.connected ? "Add new \(genre) songs like yours to a Spotify playlist"
-                                            : "Connect Spotify below to make Spotify playlists")
+            Button {
+                if model.discover.lists[genre] == nil { model.discoverGenre(genre) }
+                showDiscover = true
+            } label: { Image(systemName: "sparkle.magnifyingglass") }
+                .help("Discover new \(genre) songs like yours (preview them, send them to Spotify)")
+                .sheet(isPresented: $showDiscover) { DiscoverSheet(genre: genre) }
+            if spotify.connected {
+                if spotify.working == genre {
+                    ProgressView().controlSize(.small).frame(width: 24)
+                } else {
+                    Button { model.makeSpotifyPlaylist(genre) } label: { Image(systemName: "music.note.house") }
+                        .disabled(spotify.working != nil)
+                        .help("Add new \(genre) songs like yours straight to a Spotify playlist")
+                }
             }
             if let url = spotify.playlistURL(for: genre) {
                 Button { NSWorkspace.shared.open(url) } label: { Image(systemName: "arrow.up.right.square") }
@@ -313,7 +321,7 @@ struct SpotifyCard: View {
 
     var body: some View {
         @Bindable var spotify = model.spotify
-        SettingsCard(title: "Spotify", symbol: "music.note.house") {
+        SettingsCard(title: "Spotify Direct (needs Premium)", symbol: "music.note.house") {
             VStack(alignment: .leading, spacing: 10) {
                 if spotify.connected {
                     HStack {
@@ -325,7 +333,7 @@ struct SpotifyCard: View {
                         .font(.caption).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text("""
-                    Spotify only lets apps make playlists through a developer app of your own. One-time setup:
+                    Optional: lets Musiplex add songs straight into Spotify playlists. You don't need this for Discover (it works with a free account through TuneMyMusic). Spotify only allows this through a developer app of your own, whose owner must have Premium. One-time setup:
                     1. Go to developer.spotify.com/dashboard and create an app (any name). This needs Spotify Premium.
                     2. Add the redirect URI \(SpotifyLink.redirect) and tick Web API.
                     3. Copy its Client ID here, then press Connect and sign in in your browser.
