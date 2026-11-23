@@ -1130,8 +1130,13 @@ class Server:
             return web.json_response({**info, "started": True})
         import tarfile
         with tarfile.open(target) as tar:
-            safe = [m for m in tar.getmembers() if not (m.name.startswith("/") or ".." in Path(m.name).parts)]
-            tar.extractall(folder, members=safe)
+            # Only plain files and folders, inside the update folder (no links, no absolute or ../ paths).
+            safe = [m for m in tar.getmembers() if (m.isfile() or m.isdir())
+                    and not (m.name.startswith("/") or ".." in Path(m.name).parts)]
+            if hasattr(tarfile, "data_filter"):
+                tar.extractall(folder, members=safe, filter="data")
+            else:
+                tar.extractall(folder, members=safe)
         root = next((p for p in folder.iterdir() if p.is_dir() and (p / "Linux" / "install.sh").exists()), None)
         if root is None:
             return web.json_response({**info, "error": "The download didn't contain the installer."})
