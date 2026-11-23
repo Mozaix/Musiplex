@@ -12,6 +12,9 @@ final class HTTPServer: @unchecked Sendable {
     private var library = Data("[]".utf8)
     /// Where Workload on this Mac should sync (the linked Linux server, or this Mac): set by the app.
     private var hub: [String: Any] = [:]
+    /// Keys also accepted for /tasks: the linked server's, so a phone paired with it
+    /// (or nearby over Bluetooth) can sync with this Mac too.
+    private var taskKeys: Set<String> = []
     private let token: String
     private let artDir: URL
 
@@ -27,8 +30,14 @@ final class HTTPServer: @unchecked Sendable {
         lock.unlock()
     }
 
-    func setHub(_ value: [String: Any]) {
-        lock.lock(); hub = value; lock.unlock()
+    func setHub(_ value: [String: Any], taskKeys keys: Set<String> = []) {
+        lock.lock(); hub = value; taskKeys = keys; lock.unlock()
+    }
+
+    func acceptsTaskKey(_ key: String?) -> Bool {
+        guard let key, !key.isEmpty else { return false }
+        lock.lock(); defer { lock.unlock() }
+        return key == token || taskKeys.contains(key)
     }
 
     func start(port: Int) throws {
@@ -134,17 +143,18 @@ final class HTTPServer: @unchecked Sendable {
                 return respond(conn, 404, "Not Found")
             }
         }
-        guard comps.queryItems?.first(where: { $0.name == "t" })?.value == token else {
-            return respond(conn, 401, "Unauthorized")
-        }
-
+        let key = comps.queryItems?.first(where: { $0.name == "t" })?.value
         if path == "/tasks" {
+            guard acceptsTaskKey(key) else { return respond(conn, 401, "Unauthorized") }
             if method == "POST" {
                 guard let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return respond(conn, 400, "Bad Request") }
                 TaskHub.shared.merge(obj["tasks"] as? [[String: Any]] ?? [])
             }
             return respond(conn, 200, "OK", type: "application/json", body: TaskHub.shared.snapshot())
-        } else if path == "/catalog" {
+        }
+        guard key == token else { return respond(conn, 401, "Unauthorized") }
+
+        if path == "/catalog" {
             lock.lock(); let body = library; lock.unlock()
             respond(conn, 200, "OK", type: "application/json", body: body)
         } else if path.hasPrefix("/art/") {

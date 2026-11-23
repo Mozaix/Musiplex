@@ -22,6 +22,9 @@ final class LinkedServer {
 
     var isLinked: Bool { token != nil && !hosts.isEmpty }
 
+    /// The linked server's key (trusted for tasks on this Mac: one pairing, both hubs).
+    var key: String? { token }
+
     /// The linked server as Workload's hub: its address and key, so Workload on this Mac
     /// syncs with it without asking for a PIN.
     var hub: [String: Any]? {

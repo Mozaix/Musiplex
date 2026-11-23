@@ -53,7 +53,7 @@ final class Server {
     var chainToken: String { token }
 
     /// Tells the web server where Workload on this Mac should sync (no PIN needed).
-    func setWorkloadHub(_ hub: [String: Any]) { http.setHub(hub) }
+    func setWorkloadHub(_ hub: [String: Any], taskKeys: Set<String> = []) { http.setHub(hub, taskKeys: taskKeys) }
     /// This Mac as the hub (when it isn't linked to another Musiplex server).
     var selfHub: [String: Any] { ["host": "127.0.0.1", "port": Net.httpPort, "token": token, "name": macName, "via": "local"] }
 

@@ -56,6 +56,15 @@ final class TaskHub: @unchecked Sendable {
 
     private static func updated(_ t: [String: Any]) -> Double { (t["updated"] as? NSNumber)?.doubleValue ?? 0 }
 
+    /// Called after this Mac's list changes (Workload edits, Toddle): replicate to the linked server.
+    var onChange: (@Sendable () -> Void)?
+
+    /// Every task, removed ones included (for replicating with the linked server).
+    func allTasks() -> [[String: Any]] {
+        lock.lock(); defer { lock.unlock() }
+        return Array(tasks.values)
+    }
+
     /// {"tasks": [...], "now": epoch}
     func snapshot() -> Data {
         lock.lock(); defer { lock.unlock() }
@@ -67,7 +76,7 @@ final class TaskHub: @unchecked Sendable {
     }
 
     /// Last write wins, per task. A reinstated Toddle task stops following Toddle.
-    func merge(_ incoming: [[String: Any]]) {
+    func merge(_ incoming: [[String: Any]], notify: Bool = true) {
         lock.lock(); defer { lock.unlock() }
         var changed = false
         for raw in incoming {
@@ -83,6 +92,7 @@ final class TaskHub: @unchecked Sendable {
             }
         }
         if changed { prune(); save() }
+        if changed, notify { onChange?() }
     }
 
     /// Toddle: new deadlines are added; changed ones updated (keeping your urgency and done

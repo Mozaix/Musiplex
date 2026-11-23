@@ -215,12 +215,8 @@ class Api:
     """Called from the Musiplex page (window.pywebview.api)."""
 
     def notch(self, open_: bool, idle_hidden: bool = False):
-        w = windows.get("notch")
-        if not w:
-            return
         size = NOTCH_OPEN if open_ else NOTCH_IDLE if idle_hidden else NOTCH_SMALL
-        w.resize(*size)
-        w.move(int((screen_w - size[0]) / 2), 0)
+        notch_shape.go(size)
 
     def show_main(self):
         w = windows.get("main")
@@ -299,6 +295,9 @@ class Api:
         """Workload was ticked in the installer (or added later)."""
         return (Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Workload" / "Workload.exe").exists()
 
+    def open_browser(self, url: str = ""):
+        browser.open(url or None)
+
     def get_prefs(self):
         return prefs()
 
@@ -315,13 +314,309 @@ class Api:
                 windows.pop("notch").destroy()
 
 
+class NotchShape:
+    """Moves and sizes the notch natively, like the Mac's: always centred on the main screen
+    (in real pixels, so display scaling can't push it off-centre), size and position changed
+    in one step, eased open and closed, with rounded bottom corners."""
+    SWP = 0x0010 | 0x0040 | 0x0004          # NOACTIVATE | SHOWWINDOW | NOZORDER
+    TOPMOST = -1
+
+    def __init__(self):
+        self.hwnd = None
+        self.size = NOTCH_SMALL               # logical (96-dpi) size
+        self.target = NOTCH_SMALL
+        self.lock = threading.Lock()
+        self.anim = None
+
+    def attach(self, window):
+        try:
+            self.hwnd = int(window.native.Handle.ToInt64())
+        except Exception:
+            self.hwnd = None
+        self.apply(self.size)
+
+    def screen(self):
+        """(left, top, width, scale) of the primary monitor, in physical pixels."""
+        try:
+            class RECT(ctypes.Structure):
+                _fields_ = [("l", ctypes.c_long), ("t", ctypes.c_long), ("r", ctypes.c_long), ("b", ctypes.c_long)]
+
+            class MONITORINFO(ctypes.Structure):
+                _fields_ = [("cb", ctypes.c_ulong), ("rcMonitor", RECT), ("rcWork", RECT), ("flags", ctypes.c_ulong)]
+
+            class POINT(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+            user32.MonitorFromPoint.restype = ctypes.c_void_p
+            mon = user32.MonitorFromPoint(POINT(0, 0), 1)            # MONITOR_DEFAULTTOPRIMARY
+            info = MONITORINFO(); info.cb = ctypes.sizeof(MONITORINFO)
+            user32.GetMonitorInfoW(ctypes.c_void_p(mon), ctypes.byref(info))
+            dpi = user32.GetDpiForWindow(self.hwnd) if self.hwnd else 96
+            r = info.rcMonitor
+            return r.l, r.t, r.r - r.l, (dpi or 96) / 96
+        except Exception:
+            return 0, 0, screen_w, 1.0
+
+    def apply(self, size):
+        if not (self.hwnd and user32):
+            w = windows.get("notch")
+            if w:   # fallback: pywebview's own (two-step) move
+                w.resize(int(size[0]), int(size[1]))
+                w.move(int((screen_w - size[0]) / 2), 0)
+            return
+        left, top, width, scale = self.screen()
+        w, h = max(1, round(size[0] * scale)), max(1, round(size[1] * scale))
+        x = left + (width - w) // 2
+        user32.SetWindowPos(ctypes.c_void_p(self.hwnd), ctypes.c_void_p(self.TOPMOST), x, top, w, h, self.SWP & ~0x0004)
+        radius = round(16 * scale) if size[1] > 12 else round(3 * scale)
+        gdi = ctypes.windll.gdi32
+        gdi.CreateRoundRectRgn.restype = ctypes.c_void_p
+        rgn = gdi.CreateRoundRectRgn(0, -radius, w + 1, h + 1, radius * 2, radius * 2)   # square top, round bottom
+        user32.SetWindowRgn(ctypes.c_void_p(self.hwnd), ctypes.c_void_p(rgn), True)
+
+    def go(self, target):
+        """Ease from the current size to `target` (~0.2 s, quick start and soft landing)."""
+        with self.lock:
+            self.target = tuple(target)
+            if self.anim and self.anim.is_alive():
+                return                          # the running animation picks up the new target
+            self.anim = threading.Thread(target=self._animate, daemon=True)
+            self.anim.start()
+
+    def _animate(self):
+        while True:
+            with self.lock:
+                start, end = self.size, self.target
+            if start == end:
+                return
+            frames = 14
+            for i in range(1, frames + 1):
+                with self.lock:
+                    if self.target != end:      # changed mid-way: restart from here
+                        break
+                t = i / frames
+                ease = 1 - (1 - t) ** 3
+                cur = (start[0] + (end[0] - start[0]) * ease, start[1] + (end[1] - start[1]) * ease)
+                self.apply(cur)
+                with self.lock:
+                    self.size = cur if i < frames else end
+                time.sleep(0.014)
+
+
+notch_shape = NotchShape()
+
+
+# ----------------------------------------------------------------------------- built-in browser
+
+FLOATERS = Path(os.environ.get("MUSIPLEX_FLOATERS", Path.home() / "Documents" / "Songs" / "Floaters"))
+AD_HOSTS = (
+    "doubleclick.net", "googlesyndication.com", "googleadservices.com", "google-analytics.com",
+    "googletagmanager.com", "googletagservices.com", "adservice.google.com", "amazon-adsystem.com", "adnxs.com",
+    "adsrvr.org", "taboola.com", "outbrain.com", "criteo.com", "criteo.net", "pubmatic.com", "rubiconproject.com",
+    "openx.net", "casalemedia.com", "scorecardresearch.com", "quantserve.com", "moatads.com", "adform.net",
+    "smartadserver.com", "yieldmo.com", "media.net", "zedo.com", "propellerads.com", "popads.net", "popcash.net",
+    "adsterra.com", "exoclick.com", "juicyads.com", "hilltopads.net", "onclickads.net", "trafficjunky.net", "mgid.com",
+    "revcontent.com", "hotjar.com", "mouseflow.com", "fullstory.com", "facebook.net", "ads-twitter.com",
+    "analytics.twitter.com", "bat.bing.com", "clarity.ms", "adcolony.com", "applovin.com", "unityads.unity3d.com",
+    "chartbeat.com", "newrelic.com", "nr-data.net", "segment.io", "mixpanel.com", "branch.io", "onesignal.com",
+    "pushwoosh.com", "a-ads.com", "coinzilla.com", "bidvertiser.com", "adcash.com")
+
+
+def blocked(host: str) -> bool:
+    host = (host or "").lower()
+    return any(host == d or host.endswith("." + d) for d in AD_HOSTS)
+
+
+class Browser:
+    """Musiplex's built-in browser (like the Mac's): back, forward, reload, an address bar,
+    ad and tracker blocking, and downloads saved straight to Documents/Songs/Floaters, so
+    music you download shows up in Floating. It's a native window with Microsoft Edge's
+    engine (WebView2, already part of Musiplex.exe), and it only exists while it's open."""
+
+    def __init__(self):
+        self.form = None
+        self.on_ready = None          # selftest hook
+
+    def open(self, url: str | None = None):
+        main = windows.get("main") or windows.get("notch")
+        if not main:
+            return
+        from System import Action
+        main.native.BeginInvoke(Action(lambda: self._open(url)))
+
+    def _open(self, url):
+        import clr  # noqa: F401  (pythonnet, loaded by pywebview)
+        clr.AddReference("System.Windows.Forms")
+        clr.AddReference("System.Drawing")
+        from System import Uri, EventHandler
+        from System.Drawing import Color, Font, Size, Point, FontStyle, ContentAlignment
+        from System.Windows.Forms import (Form, Panel, TextBox, Button, DockStyle, FlatStyle, Keys,
+                                          AnchorStyles, Label, Padding, FormStartPosition, BorderStyle)
+        from Microsoft.Web.WebView2.WinForms import WebView2, CoreWebView2CreationProperties
+        if self.form is not None and not self.form.IsDisposed:
+            self.form.Show(); self.form.Activate()
+            if url:
+                self._go(url)
+            return
+        p = prefs_raw()
+        ads_on = p.get("adblock", True)
+        dark, panel, text = Color.FromArgb(18, 18, 24), Color.FromArgb(28, 28, 34), Color.FromArgb(240, 240, 245)
+        form = Form()
+        form.Text = "Musiplex Browser"
+        form.Size = Size(1200, 820)
+        form.StartPosition = FormStartPosition.CenterScreen
+        form.BackColor = dark
+        bar = Panel(); bar.Dock = DockStyle.Top; bar.Height = 46; bar.BackColor = panel; bar.Padding = Padding(8, 8, 8, 8)
+
+        def button(label, x, width=34, tip=""):
+            b = Button(); b.Text = label; b.Location = Point(x, 8); b.Size = Size(width, 30)
+            b.FlatStyle = FlatStyle.Flat; b.FlatAppearance.BorderSize = 0
+            b.BackColor = Color.FromArgb(44, 44, 52); b.ForeColor = text
+            b.Font = Font("Segoe UI", 10.5); b.TabStop = False
+            bar.Controls.Add(b)
+            return b
+        back, fwd, reload = button("‹", 8), button("›", 46), button("⟳", 84)
+        address = TextBox(); address.Location = Point(126, 11); address.Height = 26
+        address.Font = Font("Segoe UI", 10.5); address.BackColor = Color.FromArgb(40, 40, 48); address.ForeColor = text
+        address.BorderStyle = getattr(BorderStyle, "None")
+        address.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+        bar.Controls.Add(address)
+        ads = button("Ads blocked" if ads_on else "Ads allowed", 0, 104)
+        floaters = button("Floaters", 0, 82)
+        status = Label(); status.ForeColor = Color.FromArgb(163, 138, 255); status.AutoSize = False
+        status.Size = Size(220, 30); status.TextAlign = ContentAlignment.MiddleLeft
+        status.Font = Font("Segoe UI", 9, FontStyle.Bold)
+        bar.Controls.Add(status)
+
+        def layout(*_):
+            w = bar.ClientSize.Width
+            floaters.Location = Point(w - 90, 8)
+            ads.Location = Point(w - 200, 8)
+            status.Location = Point(w - 430, 8)
+            address.Width = max(120, w - 126 - 440)
+        bar.Resize += EventHandler(layout)
+
+        view = WebView2(); view.Dock = DockStyle.Fill
+        props = CoreWebView2CreationProperties()
+        props.UserDataFolder = str(APPDATA / "browser")
+        view.CreationProperties = props
+        form.Controls.Add(view)
+        form.Controls.Add(bar)
+        self.form, self.view, self.address, self.status = form, view, address, status
+
+        def ready(sender, e):
+            core = view.CoreWebView2
+            if core is None:
+                return
+            FLOATERS.mkdir(parents=True, exist_ok=True)
+            try:
+                core.Profile.DefaultDownloadFolderPath = str(FLOATERS)     # downloads → Floaters
+            except Exception:
+                pass
+            try:
+                from Microsoft.Web.WebView2.Core import CoreWebView2WebResourceContext
+                core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All)
+
+                def request(s, ev):
+                    if prefs_raw().get("adblock", True) and blocked(Uri(ev.Request.Uri).Host):
+                        ev.Response = core.Environment.CreateWebResourceResponse(None, 403, "Blocked", "")
+                core.WebResourceRequested += request
+            except Exception:
+                pass
+
+            def navigated(s, ev):
+                address.Text = core.Source
+                form.Text = (core.DocumentTitle or "Musiplex Browser") + " — Musiplex"
+                back.Enabled, fwd.Enabled = core.CanGoBack, core.CanGoForward
+                save_pref_raw("browser_last", core.Source)
+            core.NavigationCompleted += navigated
+
+            def download(s, ev):
+                op = ev.DownloadOperation
+                name = os.path.basename(op.ResultFilePath)
+                status.Text = f"Downloading {name}…"
+
+                def changed(s2, e2):
+                    if str(op.State) == "Completed":
+                        status.Text = f"Saved to Floaters: {name}"
+                    elif str(op.State) == "Interrupted":
+                        status.Text = f"Download stopped: {name}"
+                op.StateChanged += changed
+            try:
+                core.DownloadStarting += download
+            except Exception:
+                pass
+            self._go(url or p.get("browser_last") or "https://www.google.com")
+            if self.on_ready:
+                self.on_ready(True)
+        view.CoreWebView2InitializationCompleted += ready
+
+        def go_typed(sender, e):
+            if e.KeyCode == Keys.Enter:
+                e.SuppressKeyPress = True
+                self._go(address.Text)
+        address.KeyDown += go_typed
+        back.Click += lambda s, e: view.CoreWebView2 and view.CoreWebView2.GoBack()
+        fwd.Click += lambda s, e: view.CoreWebView2 and view.CoreWebView2.GoForward()
+        reload.Click += lambda s, e: view.CoreWebView2 and view.CoreWebView2.Reload()
+
+        def toggle_ads(s, e):
+            on = not prefs_raw().get("adblock", True)
+            save_pref_raw("adblock", on)
+            ads.Text = "Ads blocked" if on else "Ads allowed"
+            if view.CoreWebView2:
+                view.CoreWebView2.Reload()
+        ads.Click += toggle_ads
+        floaters.Click += lambda s, e: local_post("/local/open", {"what": "floaters"})
+
+        def closed(s, e):
+            self.form = None   # gone: its memory is freed
+        form.FormClosed += closed
+        layout()
+        form.Show()
+        view.EnsureCoreWebView2Async(None)
+
+    def _go(self, text):
+        text = (text or "").strip()
+        if not text:
+            return
+        if "://" not in text:
+            text = ("https://" + text) if ("." in text and " " not in text) else \
+                "https://www.google.com/search?q=" + urllib.parse.quote_plus(text)
+        try:
+            self.view.CoreWebView2.Navigate(text)
+        except Exception:
+            try:
+                from System import Uri
+                self.view.Source = Uri(text)
+            except Exception:
+                pass
+
+
+browser = Browser()
+
+
+def prefs_raw() -> dict:
+    try:
+        return json.loads(PREFS.read_text())
+    except Exception:
+        return {}
+
+
+def save_pref_raw(key, value):
+    p = prefs_raw()
+    p[key] = value
+    save_prefs(p)
+
+
 def make_notch(api: Api):
     import webview
     w, h = NOTCH_SMALL
-    windows["notch"] = webview.create_window(
+    win = webview.create_window(
         "Musiplex Notch", URL + "app?mode=notch", width=w, height=h, x=int((screen_w - w) / 2), y=0,
         frameless=True, on_top=True, resizable=False, easy_drag=False, focus=False, shadow=False,
         background_color="#000000", js_api=api)
+    windows["notch"] = win
+    win.events.shown += lambda: notch_shape.attach(win)
 
 
 def tray(api: Api):
@@ -384,6 +679,8 @@ def main():
         import musiplex_server
         sys.argv = [sys.argv[0], *args]
         return musiplex_server.main()
+    if "--selftest-browser" in args:
+        return selftest_browser()
     background = "--background" in args
     args = [a for a in args if a != "--background"]
     if running():               # already open: bring its window forward
@@ -415,6 +712,38 @@ def main():
     tray(api)
     webview.start(private_mode=False, storage_path=str(APPDATA / "window"))
     os._exit(0)
+
+
+def selftest_browser():
+    """CI: opens the app's window and the built-in browser, and exits 0 once the browser's
+    engine is ready (1 after 40 s). Writes %APPDATA%\\Musiplex\\selftest.log."""
+    APPDATA.mkdir(parents=True, exist_ok=True)
+    log = open(APPDATA / "selftest.log", "w", encoding="utf-8", buffering=1)
+    import traceback
+    import webview
+    win = webview.create_window("Musiplex selftest", html="<p>selftest</p>", width=300, height=200)
+    windows["main"] = win
+
+    def done(ok):
+        log.write(f"browser ready: {ok}\n")
+        os._exit(0 if ok else 1)
+    browser.on_ready = done
+
+    def go():
+        try:
+            time.sleep(1)
+            browser.open("about:blank")
+            log.write("browser opening\n")
+        except Exception:
+            log.write(traceback.format_exc())
+            os._exit(1)
+    threading.Timer(40, lambda: (log.write("timed out\n"), os._exit(1))).start()
+    win.events.loaded += lambda: threading.Thread(target=go, daemon=True).start()
+    try:
+        webview.start()
+    except Exception:
+        log.write(traceback.format_exc())
+        os._exit(1)
 
 
 if __name__ == "__main__":

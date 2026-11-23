@@ -174,18 +174,23 @@ body.m{background:#121218}
 #minip .q{flex:1;overflow-y:auto;margin:8px -14px 0;border-top:1px solid var(--line)}
 /* ---------------- notch window ---------------- */
 body.n{background:transparent}
-#notch{position:absolute;inset:0;background:#000;border-radius:0 0 16px 16px;overflow:hidden;display:flex;flex-direction:column}
-#notch .pill{height:32px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;gap:8px;flex:none}
-#notch .pill .art{width:20px;height:20px;border-radius:5px}
+#notch{position:absolute;inset:0;background:#000;border-radius:0 0 16px 16px;overflow:hidden;display:flex;flex-direction:column;font-size:13px}
+#notch .pill{height:32px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;gap:8px;flex:none;transition:opacity .15s}
+#notch .pill .art{width:20px;height:20px;border-radius:5px;box-shadow:0 0 0 1px rgba(255,255,255,.08)}
+#notch.open .pill{display:none}
+#notch .head{display:flex;align-items:center;padding:8px 14px 0;gap:2px;flex:none}
+#notch .head .grp{display:flex;gap:2px}#notch .head .gap{flex:1}
+#notch .head button{width:32px;height:28px;border-radius:9px;display:grid;place-items:center;color:rgba(255,255,255,.5);font-size:14px;transition:background .15s,color .15s}
+#notch .head button:hover{color:#fff;background:rgba(255,255,255,.08)}#notch .head button.sel{color:#fff;background:rgba(255,255,255,.14)}
+#notch .head .bat{font:600 11px system-ui;color:rgba(255,255,255,.6);margin-left:8px;display:flex;align-items:center;gap:4px}
+#notch .bodyfade{animation:nfade .24s cubic-bezier(.2,.9,.25,1) .05s both}
+@keyframes nfade{from{opacity:0;transform:translateY(-6px) scale(.98)}to{opacity:1;transform:none}}
 .bars{display:flex;gap:2px;align-items:flex-end;height:12px}.bars i{width:3px;background:var(--grad);border-radius:1px;animation:b 1s ease-in-out infinite}
 .bars i:nth-child(2){animation-delay:.2s}.bars i:nth-child(3){animation-delay:.4s}.bars i:nth-child(4){animation-delay:.1s}
 @keyframes b{0%,100%{height:3px}50%{height:12px}}.bars.stop i{animation:none;height:3px}
-#notch .tabs{display:flex;align-items:center;gap:2px;padding:4px 10px 0}
-#notch .tabs button{width:34px;height:28px;border-radius:8px;display:grid;place-items:center;color:var(--dim);font-size:15px}
-#notch .tabs button:hover{color:#fff;background:var(--hover)}#notch .tabs button.sel{color:#fff;background:var(--raised)}
-#notch .body{flex:1;padding:10px 18px 14px;overflow:hidden;display:flex}
+#notch .body{flex:1;padding:12px 20px 16px;overflow:hidden;display:flex}
 #notch .body>div{flex:1;min-width:0;overflow-y:auto}
-#notch .mus{display:flex;gap:18px;align-items:center}#notch .mus .art{width:120px;height:120px;border-radius:12px}
+#notch .mus{display:flex;gap:20px;align-items:center;height:100%}#notch .mus .art{width:128px;height:128px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.6)}
 #notch .mus .ctl{margin-top:4px;justify-content:flex-start;gap:16px}#notch .mus .ctl button{width:28px;height:28px;font-size:15px}
 #notch .mus .ctl .big{width:36px;height:36px;font-size:15px}
 .drop{border:1.5px dashed rgba(255,255,255,.25);border-radius:12px;padding:14px;text-align:center;color:var(--dim);font-size:13px}
@@ -1019,6 +1024,7 @@ function viewSettings(c) {
     drawF();
     const add = h(`<div class="btns" style="padding:8px 0 0"><button class="btn small">${icon("plus")} Import Folder…</button><button class="btn small">${icon("folder")} Open Floaters</button></div>`);
     add.children[0].onclick = importFolder; add.children[1].onclick = () => L.post("/local/open", { what: "floaters" });
+    if (api && api.open_browser) { const b = h(`<button class="btn small">${icon("link")} Open Browser</button>`); b.onclick = () => api.open_browser(""); add.appendChild(b); }
     f.appendChild(add);
     f.appendChild(h(`<div class="note">Your Music folder and Documents › Songs are always included. Drop files in Documents › Songs › Floaters and they show up in Floating within seconds.</div>`));
     // Floating
@@ -1326,6 +1332,7 @@ function drawSidebar() {
   s.innerHTML = `<div class="logo"><b>${icon("note")}</b>Musiplex</div>
     <div class="search">${icon("search")}<input id="dsearch" placeholder="Search" type="search" autocomplete="off"></div>
     ${navs.map(([v, t, i]) => `<button class="nav${route.v === v && !query ? " sel" : ""}" data-v="${v}">${icon(i)}${t}</button>`).join("")}
+    ${api && api.open_browser ? `<button class="nav" id="brw" title="Downloads go to Floating">${icon("link")}Browser</button>` : ""}
     <div class="sec">LIBRARY</div>
     ${local ? `<button class="nav" id="imp">${icon("plus")}Import Folder…</button>` : ""}
     <button class="nav" id="conn"><span class="ring2 statusdot" style="margin:0 5px"></span><span class="statuslabel" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">…</span></button>
@@ -1337,6 +1344,7 @@ function drawSidebar() {
   const q = $("dsearch"); q.value = query; q.oninput = e => { query = e.target.value; render(); drawSidebarSel(); };
   s.querySelectorAll(".nav[data-v]").forEach(b => b.onclick = () => { query = ""; go({ v: b.dataset.v }); });
   if ($("imp")) $("imp").onclick = importFolder;
+  if ($("brw")) $("brw").onclick = () => api.open_browser("");
   $("conn").onclick = () => local ? go({ v: "settings" }) : openLink();
   $("fys").onclick = () => { query = ""; go({ v: "surprise" }); };
   if ($("fyg")) $("fyg").onclick = () => { query = ""; go({ v: "list", id: "auto-guess", kind: "Guess" }); };
@@ -1459,10 +1467,12 @@ setInterval(() => { if (route.v === "calendar" || (MODE === "notch" && notchOpen
 // ======================================================================= notch window
 let notchOpen = false, notchTab = store.get("notchTab", "music"), notchTimer = null;
 const NTABS = [["music", "note", "Music"], ["calendar", "cal", "Calendar"], ["files", "box", "File Box"], ["clipboard", "clip", "Clipboard"], ["notes", "pen", "Notes"], ["money", "money", "Currency"], ["settings", "gear", "Settings"], ["power", "bolt", "Battery"]];
+const NLEFT = ["music", "calendar", "files", "clipboard", "notes"], NRIGHT = ["money", "settings", "power"];
 function buildNotch() {
   document.body.className = "desk n";
+  const tabBtn = k => { const [, i, t] = NTABS.find(x => x[0] === k); return `<button data-t="${k}" title="${t}">${icon(i)}</button>`; };
   $("root").innerHTML = `<div id="notch"><div class="pill" id="npill"><div class="art np-art"></div><span class="dim" id="nbat" style="font-size:11px;font-weight:600"></span><div class="bars" id="nbars"><i></i><i></i><i></i><i></i></div></div>
-    <div class="tabs hidden" id="ntabs">${NTABS.map(([k, i, t]) => `<button data-t="${k}" title="${t}">${icon(i)}</button>`).join("")}<span style="flex:1"></span></div><div class="body hidden" id="nbody"><div id="npane"></div></div></div>`;
+    <div class="head hidden" id="ntabs"><div class="grp">${NLEFT.map(tabBtn).join("")}</div><div class="gap"></div><div class="grp">${NRIGHT.map(tabBtn).join("")}</div><span class="bat" id="nbat2"></span></div><div class="body hidden" id="nbody"><div id="npane"></div></div></div>`;
   const n = $("notch");
   n.onmouseenter = () => { clearTimeout(notchTimer); setNotch(true); };
   n.onmouseleave = () => { clearTimeout(notchTimer); notchTimer = setTimeout(() => { if (!document.activeElement || !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) || notchTab === "music") setNotch(false); }, 450); };
@@ -1474,9 +1484,13 @@ function buildNotch() {
 function setNotch(open) {
   if (open === notchOpen) return;
   notchOpen = open;
+  $("notch").classList.toggle("open", open);
   $("ntabs").classList.toggle("hidden", !open); $("nbody").classList.toggle("hidden", !open);
   if (api) api.notch(open, idleHidden());
-  if (open) drawNotch();
+  if (open) {
+    const b = $("nbody"); b.classList.remove("bodyfade"); void b.offsetWidth; b.classList.add("bodyfade");
+    drawNotch();
+  }
 }
 const idleHidden = () => settings.notchIdle && !(state && cur() && state.isPlaying);
 let battery = null;
@@ -1484,8 +1498,9 @@ function drawNotchPill() {
   const playing = !!(state && state.isPlaying && cur());
   $("nbars") && $("nbars").classList.toggle("stop", !playing);
   if (api && !notchOpen) api.notch(false, idleHidden());
-  if (settings.notchBattery) fetch("/local/battery").then(r => r.json()).then(b => { battery = b; $("nbat").textContent = b.percent != null ? `${b.charging ? "⚡" : ""}${b.percent}%` : ""; }).catch(() => {});
-  else $("nbat").textContent = "";
+  const showBat = text => { $("nbat").textContent = text; if ($("nbat2")) $("nbat2").textContent = text; };
+  if (settings.notchBattery) fetch("/local/battery").then(r => r.json()).then(b => { battery = b; showBat(b.percent != null ? `${b.charging ? "⚡" : ""}${b.percent}%` : ""); }).catch(() => {});
+  else showBat("");
 }
 function drawNotchMusic() {
   drawNotchPill();

@@ -100,12 +100,26 @@ final class AppModel {
         // Workload: this Mac keeps tasks (and checks Toddle) when it's the hub; Workload on
         // this Mac asks /local/workload where to sync. Refreshed as the link changes.
         TaskHub.shared.startToddle()
+        // This Mac always keeps the full list (Workload here syncs with it, even when the
+        // linked server is off), and replicates it with the linked server, so both are one.
         let publishHub = { [weak self] in
             guard let self else { return }
-            self.server.setWorkloadHub(self.linked.hub ?? self.server.selfHub)
+            var hub = self.server.selfHub
+            if let linked = self.linked.hub { hub["replica"] = linked["name"] }
+            self.server.setWorkloadHub(hub, taskKeys: Set([self.linked.key].compactMap { $0 }))
         }
         publishHub()
         Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { _ in MainActor.assumeIsolated { publishHub() } }
+        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.replicateTasks() }
+        }
+        TaskHub.shared.onChange = { [weak self] in
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                self?.replicateTasks()
+            }
+        }
+        replicateTasks()
         linked.nowPlaying = { [weak self] in
             guard let self, let t = self.library.track(self.session.state.currentID) else { return nil }
             return ["title": t.title, "artist": t.artist, "album": t.album, "duration": t.duration,
@@ -191,6 +205,23 @@ final class AppModel {
     // MARK: Genre playlists
 
     /// Your songs in a genre (as grouped in Your Taste).
+    @ObservationIgnored private var replicating = false
+
+    /// Sends this Mac's tasks to the linked server and takes back its list (newest change wins
+    /// per task, so running this both ways keeps the two identical).
+    func replicateTasks() {
+        guard linked.isLinked, !replicating else { return }
+        replicating = true
+        let mine = TaskHub.shared.allTasks()
+        Task { @MainActor in
+            defer { replicating = false }
+            guard let data = await linked.post("tasks", ["tasks": mine]),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let theirs = obj["tasks"] as? [[String: Any]] else { return }
+            TaskHub.shared.merge(theirs, notify: false)
+        }
+    }
+
     func tracks(inGenre genre: String) -> [Track] {
         let map = recommender.genres(library.tracks)
         return library.tracks.filter { map[$0.id] == genre }

@@ -661,7 +661,8 @@ final class PhoneModel {
 
     private var lastSaved: String?
 
-    /// Remembers the song (and its album) playing now, for "Play music".
+    /// Remembers what's playing now — the whole queue (your playlist or album) and the
+    /// song you're on — for "Play music" and the Continue widget.
     private func rememberLast() {
         guard let t = currentTrack, t.id != lastSaved else { return }
         lastSaved = t.id
@@ -669,12 +670,27 @@ final class PhoneModel {
         d.set(t.id, forKey: "lastTrackID")
         d.set(t.album, forKey: "lastAlbum")
         d.set(t.artist, forKey: "lastArtist")
+        let state = session.state
+        if state.radio == nil, state.queue.count > 1 {     // Surprise picks as it goes: nothing to resume
+            d.set(Array(state.queue.prefix(2000)), forKey: "lastQueue")
+        }
     }
 
-    /// The album you last listened to, from the song you were on (Surprise if there's none yet).
+    /// Continue: picks up exactly where you were — the same playlist (or album, or queue),
+    /// from the song you were on. Something paused just resumes. Surprise if there's nothing yet.
     func playLastAlbum() {
         let d = UserDefaults.standard
+        if currentTrack != nil, !session.state.isPlaying, !session.state.queue.isEmpty {
+            activateAudio()
+            return send(Command(action: "resume"))
+        }
         guard let lastID = d.string(forKey: "lastTrackID") else { return startSurprise() }
+        if let ids = d.stringArray(forKey: "lastQueue"), ids.contains(lastID) {
+            let songs = ids.compactMap { track($0) }.filter { isLinked || isDownloaded($0.id) }
+            if songs.count > 1 {
+                return play(songs, at: songs.firstIndex { $0.id == lastID } ?? 0)
+            }
+        }
         let name = d.string(forKey: "lastAlbum")?.lowercased()
         let list = albums.first { $0.trackIDs.contains(lastID) }
             ?? albums.first { $0.name.lowercased() == name && name != nil }

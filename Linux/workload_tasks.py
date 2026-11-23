@@ -311,10 +311,18 @@ def install(router, server, config_dir: Path) -> TaskStore:
     store = TaskStore(Path(config_dir))
     server.workload = store
 
+    def with_hubs(snap: dict) -> dict:
+        """Other computers that keep the same list (a Mac linked to this server replicates it
+        and accepts this server's key), so a phone paired here can sync with either."""
+        lead = getattr(server, "leader", None)
+        if isinstance(lead, dict) and lead.get("host"):
+            snap["hubs"] = [{"host": lead["host"], "port": int(lead.get("http") or 7860), "name": "Mac"}]
+        return snap
+
     async def get_tasks(request):
         if not server.authorized(request):
             return web.Response(status=401)
-        return web.json_response(store.snapshot(), headers={"Cache-Control": "no-store"})
+        return web.json_response(with_hubs(store.snapshot()), headers={"Cache-Control": "no-store"})
 
     async def post_tasks(request):
         if not server.authorized(request):
@@ -324,7 +332,7 @@ def install(router, server, config_dir: Path) -> TaskStore:
         except ValueError:
             return web.Response(status=400)
         store.merge((body or {}).get("tasks"))
-        return web.json_response(store.snapshot())
+        return web.json_response(with_hubs(store.snapshot()))
 
     async def local_tasks(request):
         if request.method == "GET":

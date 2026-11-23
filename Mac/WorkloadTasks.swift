@@ -65,7 +65,7 @@ final class WorkloadTasks {
     func refresh() async {
         guard Self.installed else { loaded = true; return }
         struct Reply: Decodable { let tasks: [Item] }
-        let data: Data? = if let linked, linked.isLinked { await linked.get("tasks") } else { TaskHub.shared.snapshot() }
+        let data: Data? = TaskHub.shared.snapshot()     // this Mac's copy (kept in step with the linked server)
         if let data, let reply = try? JSONDecoder().decode(Reply.self, from: data) {
             items = reply.tasks.filter { !$0.done && !$0.deleted }
             failed = false

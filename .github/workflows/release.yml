@@ -13,6 +13,10 @@ on:
       ref:
         description: "Branch or commit to build (default: the tag)"
         required: false
+      upload:
+        description: "Attach the builds to the release (false = just build and test)"
+        required: false
+        default: "true"
 
 permissions:
   contents: write
@@ -74,6 +78,13 @@ jobs:
           Start-Sleep -Seconds 2
           if (-not $ok) { throw "server didn't start" }
           if ($page -ne 200) { throw "app page missing ($page)" }
+      - name: Check that the built-in browser opens
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/Musiplex.exe -ArgumentList "--selftest-browser" -Wait -PassThru
+          Write-Host "browser selftest exit code: $($p.ExitCode)"
+          Get-Content "$env:APPDATA/Musiplex/selftest.log" -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { throw "browser selftest failed" }
       - name: Check that the app opens (windows, tray, server)
         continue-on-error: true
         shell: pwsh
@@ -98,6 +109,7 @@ jobs:
           & $iscc "/DAppVersion=$v" Installer/Windows/Musiplex.iss
           if ($LASTEXITCODE -ne 0) { throw "installer build failed" }
       - name: Attach to the release
+        if: github.event_name == 'release' || inputs.upload != 'false'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -132,6 +144,7 @@ jobs:
         if: hashFiles('Workload/Android/settings.gradle', 'Workload/Android/settings.gradle.kts') != ''
         run: gradle -p Workload/Android assembleRelease --no-daemon
       - name: Attach to the release
+        if: github.event_name == 'release' || inputs.upload != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
