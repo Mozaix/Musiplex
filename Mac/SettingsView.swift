@@ -13,6 +13,7 @@ struct SettingsView: View {
             FloatingCard()
             LinkedServerCard()
             WorkloadCard()
+            UpdatesCard()
             AppleMusicCard()
             RemoteAccessCard()
             VersionHistoryCard(history: model.library.history)
@@ -543,6 +544,73 @@ struct WorkloadCard: View {
             try? await Task.sleep(for: .seconds(4))
             await load()
             busy = false
+        }
+    }
+}
+
+/// Updates from GitHub: checks the latest release and, with one click, downloads the Mac
+/// installer and opens it (it updates Musiplex and Workload together; tick what you want).
+/// Only GitHub is contacted, and nothing about you is sent.
+struct UpdatesCard: View {
+    @State private var latest: String?
+    @State private var pkg: URL?
+    @State private var page: URL?
+    @State private var status = "Checking GitHub…"
+    @State private var busy = false
+    private let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+
+    var body: some View {
+        SettingsCard(title: "Updates", symbol: "arrow.down.circle") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(status).font(.callout).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    if let latest, pkg != nil, Self.newer(latest, than: current) {
+                        Button(busy ? "Downloading…" : "Download and Install \(latest)") { install() }
+                            .buttonStyle(.borderedProminent).tint(Theme.accent).disabled(busy)
+                    }
+                    if let page { Button("What's New") { NSWorkspace.shared.open(page) } }
+                    Button("Check Now") { Task { await check() } }.disabled(busy)
+                }
+            }
+        }
+        .task { await check() }
+    }
+
+    static func newer(_ a: String, than b: String) -> Bool {
+        let p = { (v: String) in v.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) } }
+        return p(a).lexicographicallyPrecedes(p(b)) == false && p(a) != p(b)
+    }
+
+    private func check() async {
+        var req = URLRequest(url: URL(string: "https://api.github.com/repos/Mozaix/Musiplex/releases/latest")!)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("Musiplex-Updater", forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let rel = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tag = rel["tag_name"] as? String else { status = "Couldn't reach GitHub."; return }
+        let version = tag.trimmingCharacters(in: CharacterSet(charactersIn: "v"))
+        latest = version
+        page = (rel["html_url"] as? String).flatMap(URL.init)
+        pkg = (rel["assets"] as? [[String: Any]])?.first { ($0["name"] as? String)?.hasSuffix("-Mac.pkg") == true }
+            .flatMap { $0["browser_download_url"] as? String }.flatMap(URL.init)
+        status = Self.newer(version, than: current)
+            ? "Musiplex \(version) is available (you have \(current)). The installer updates Musiplex and Workload together."
+            : "You have the latest version (\(current))."
+    }
+
+    private func install() {
+        guard let pkg else { return }
+        busy = true
+        status = "Downloading the installer…"
+        Task {
+            defer { busy = false }
+            guard let (file, _) = try? await URLSession.shared.download(from: pkg) else { status = "Download failed."; return }
+            let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+            let target = downloads.appendingPathComponent(pkg.lastPathComponent)
+            try? FileManager.default.removeItem(at: target)
+            guard (try? FileManager.default.moveItem(at: file, to: target)) != nil else { status = "Couldn't save the installer."; return }
+            status = "The installer is open: pick Musiplex and Workload, then reopen Musiplex. (Saved in Downloads.)"
+            NSWorkspace.shared.open(target)
         }
     }
 }

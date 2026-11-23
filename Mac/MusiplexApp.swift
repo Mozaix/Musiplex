@@ -100,6 +100,7 @@ final class AppModel {
         // Workload: this Mac keeps tasks (and checks Toddle) when it's the hub; Workload on
         // this Mac asks /local/workload where to sync. Refreshed as the link changes.
         TaskHub.shared.startToddle()
+        taskBluetooth = TaskBluetooth(accepts: server.taskKeyCheck)   // Workload sync with nearby phones
         // This Mac always keeps the full list (Workload here syncs with it, even when the
         // linked server is off), and replicates it with the linked server, so both are one.
         let publishHub = { [weak self] in
@@ -206,6 +207,7 @@ final class AppModel {
 
     /// Your songs in a genre (as grouped in Your Taste).
     @ObservationIgnored private var replicating = false
+    @ObservationIgnored private var taskBluetooth: TaskBluetooth?
 
     /// Sends this Mac's tasks to the linked server and takes back its list (newest change wins
     /// per task, so running this both ways keeps the two identical).

@@ -398,7 +398,7 @@ async function syncNow() {
   const hosts = [];
   const seen = sync.found.find(s => s.name === P().serverName);
   if (seen) hosts.push(seen.ip);
-  for (const h of [P().serverHost, P().awayHost]) if (h && !hosts.includes(h)) hosts.push(h);
+  for (const h of [P().serverHost, P().awayHost, ...(P().extraHubs || [])]) if (h && !hosts.includes(h)) hosts.push(h);  // + the other computer keeping the list
   let why = "Server not reachable";
   const sentAt = editCount;
   for (const h of hosts) {
@@ -407,8 +407,10 @@ async function syncNow() {
       if (r.status === 404) { why = "This Musiplex server doesn't have tasks yet"; continue; }
       if (r.status === 401) { why = "The server's key changed: pair again"; continue; }
       if (r.status !== 200) continue;
-      merge(JSON.parse(r.text).tasks);
-      if (h !== P().serverHost && h !== P().awayHost) { P().serverHost = h; save(); }
+      const reply = JSON.parse(r.text);
+      merge(reply.tasks);
+      if (Array.isArray(reply.hubs)) { P().extraHubs = reply.hubs.map(x => x.host).filter(Boolean); save(); }
+      if (h !== P().serverHost && h !== P().awayHost && !(P().extraHubs || []).includes(h)) { P().serverHost = h; save(); }
       sync.status = "synced"; sync.at = new Date(); sync.busy = false; renderBadge();
       if (editCount !== sentAt) schedulePush();
       return;

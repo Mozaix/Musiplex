@@ -50,6 +50,8 @@ except ImportError:  # Bonjour is optional (Tailscale / typed address still work
 
 AUDIO = {".mp3", ".m4a", ".mp4", ".aac", ".wav", ".aif", ".aiff", ".flac", ".ogg", ".opus", ".caf"}
 WINDOWS = os.name == "nt"
+VERSION = "2.5"
+RELEASES = "https://api.github.com/repos/Mozaix/Musiplex/releases/latest"
 CONFIG = (Path(os.environ.get("APPDATA", Path.home())) / "Musiplex" if WINDOWS
           else Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "musiplex")
 HOME = Path.home()
@@ -890,7 +892,7 @@ class Server:
         if not self.local(request):
             return web.Response(status=403)
         return web.json_response({"token": self.token, "name": self.name, "computer": socket.gethostname(),
-                                  "windows": WINDOWS, "pin": self.pin, "lan": self.lan_ip(),
+                                  "windows": WINDOWS, "version": VERSION, "pin": self.pin, "lan": self.lan_ip(),
                                   "tailscale": self.tailscale_ip(), "floatersPath": str(FLOATERS),
                                   "fileboxPath": str(FILEBOX)},
                                  headers={"Cache-Control": "no-store"})
@@ -1079,6 +1081,71 @@ class Server:
         except Exception:
             return web.json_response({"ok": False})
         return web.json_response({"ok": True})
+
+    @staticmethod
+    def _newer(a: str, b: str) -> bool:
+        """True when version a is newer than b ("2.5" > "2.4.1")."""
+        def parts(v):
+            return [int(x) for x in "".join(ch for ch in v if ch.isdigit() or ch == ".").split(".") if x]
+        return parts(a) > parts(b)
+
+    async def local_update(self, request):
+        """Updates from GitHub. GET: is there a newer release? POST: download and install it
+        (Linux: unpack and run its install.sh, which updates Musiplex and Workload's window;
+        Windows: open the new installer). Only GitHub is contacted; nothing about you is sent."""
+        if request.method == "POST":
+            if not self.local(request, write=True):
+                return web.Response(status=403)
+        elif not self.local(request):
+            return web.Response(status=403)
+        try:
+            async with self.client.get(RELEASES, headers={"Accept": "application/vnd.github+json",
+                                                          "User-Agent": "Musiplex-Updater"}) as r:
+                rel = await r.json(content_type=None)
+        except Exception:
+            return web.json_response({"current": VERSION, "error": "Couldn't reach GitHub."})
+        latest = str(rel.get("tag_name") or "").lstrip("v")
+        want = "-Windows-Setup.exe" if WINDOWS else "-Linux.tar.gz"
+        asset = next((a for a in rel.get("assets") or [] if str(a.get("name", "")).endswith(want)), None)
+        info = {"current": VERSION, "latest": latest, "newer": bool(latest) and self._newer(latest, VERSION),
+                "page": rel.get("html_url"), "asset": asset and asset.get("name")}
+        if request.method != "POST":
+            return web.json_response(info)
+        if not info["newer"] or not asset:
+            return web.json_response({**info, "error": "Already up to date."})
+        import tempfile
+        folder = Path(tempfile.mkdtemp(prefix="musiplex-update-"))
+        target = folder / asset["name"]
+        try:
+            async with self.client.get(asset["browser_download_url"], headers={"User-Agent": "Musiplex-Updater"}) as r:
+                if r.status != 200:
+                    raise RuntimeError(f"HTTP {r.status}")
+                with open(target, "wb") as f:
+                    async for chunk in r.content.iter_chunked(1 << 20):
+                        f.write(chunk)
+        except Exception as e:
+            return web.json_response({**info, "error": f"Download failed ({e})."})
+        if WINDOWS:
+            os.startfile(str(target))      # the installer closes Musiplex and puts the new one in place
+            return web.json_response({**info, "started": True})
+        import tarfile
+        with tarfile.open(target) as tar:
+            safe = [m for m in tar.getmembers() if not (m.name.startswith("/") or ".." in Path(m.name).parts)]
+            tar.extractall(folder, members=safe)
+        root = next((p for p in folder.iterdir() if p.is_dir() and (p / "Linux" / "install.sh").exists()), None)
+        if root is None:
+            return web.json_response({**info, "error": "The download didn't contain the installer."})
+        script = root / "Linux" / "install.sh"
+        script.chmod(0o755)
+        # Run it outside this service, so restarting the service doesn't stop the update.
+        cmd = ["systemd-run", "--user", "--collect", "--unit", f"musiplex-update-{int(time.time())}",
+               "/usr/bin/env", "bash", str(script)]
+        try:
+            subprocess.Popen(cmd, cwd=str(root), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except FileNotFoundError:
+            subprocess.Popen(["bash", str(script)], cwd=str(root), start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return web.json_response({**info, "started": True})
 
     async def local_battery(self, request):
         """Battery for the notch: percent, and whether it's charging."""
@@ -1440,6 +1507,7 @@ class Server:
         http.router.add_route("*", "/local/filebox", self.local_filebox)
         http.router.add_post("/local/open", self.local_open)
         http.router.add_get("/local/battery", self.local_battery)
+        http.router.add_route("*", "/local/update", self.local_update)
         try:                         # Workload's school tasks (shown in the notch calendar)
             import workload_tasks
             workload_tasks.install(http.router, self, CONFIG)

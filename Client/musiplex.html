@@ -371,6 +371,7 @@ function handle(m) {
       devices = m.devices || [];
       setState(m.state); drawStatus(); loadCatalog();
       closeSheet("link"); setMsg("");
+      if (local && local.version) fetch("/local/token", { cache: "no-store" }).then(r => r.json()).then(t => { if (t.version && t.version !== local.version) location.reload(); }).catch(() => {});  // updated: load the new version
       while (pendingRemote.length) window.remote(...pendingRemote.shift());
       break;
     case "denied": {
@@ -1086,8 +1087,28 @@ function viewSettings(c) {
       const b = h(`<div class="btns" style="padding:8px 0 0"><button class="btn small">${icon("mini")} Open Mini Player</button></div>`); b.firstChild.onclick = () => api.toggle_mini(); n.appendChild(b);
     });
   }
+  // Updates from GitHub (this computer): Musiplex and Workload together
+  if (local) {
+    const up = card(c, "sync", "Updates");
+    const line = h(`<div class="note">Checking GitHub…</div>`); up.appendChild(line);
+    const btns = h(`<div class="btns" style="padding:8px 0 0"></div>`); up.appendChild(btns);
+    const show = r => {
+      btns.innerHTML = "";
+      if (r.error && !r.latest) { line.textContent = r.error; return; }
+      line.textContent = r.started ? (local.windows ? "The installer is open: follow it to finish (Musiplex restarts by itself)." : "Updating… Musiplex restarts in a minute; this window reloads by itself.")
+        : r.newer ? `Musiplex ${r.latest} is available (you have ${r.current}). It updates Musiplex and Workload together.`
+        : `You have the latest version (${r.current}).`;
+      if (r.newer && !r.started) {
+        const b = h(`<button class="btn small primary">${icon("down")} Download and install ${esc(r.latest)}</button>`);
+        b.onclick = () => { b.disabled = true; line.textContent = "Downloading…"; L.post("/local/update", {}).then(show).catch(() => { line.textContent = "Couldn't update."; }); };
+        btns.appendChild(b);
+      }
+      if (r.page) { const p = h(`<button class="btn small">${icon("link")} What's new</button>`); p.onclick = () => openURL(r.page); btns.appendChild(p); }
+    };
+    L.get("/local/update").then(show).catch(() => { line.textContent = "Couldn't reach GitHub."; });
+  }
   const ab = card(c, "note", "About");
-  ab.appendChild(h(`<div class="note">Musiplex 2.4.1 · ${ANDROID ? "Android" : local && local.windows ? "Windows" : "Desktop"}. Nothing about you is built into the app: the server's PIN and key are made on it, and this ${myWord}'s ID is made here.</div>`));
+  ab.appendChild(h(`<div class="note">Musiplex 2.5 · ${ANDROID ? "Android" : local && local.windows ? "Windows" : "Desktop"}. Nothing about you is built into the app: the server's PIN and key are made on it, and this ${myWord}'s ID is made here.</div>`));
 }
 async function importFolder() {
   let path = null;
